@@ -112,14 +112,91 @@ class MapFrame(ttk.Frame):
         self.canvas = tk.Canvas(self, bg="black", highlightthickness=0)
         self.canvas.pack(fill='x')
         
+        self.dragged_pin_id = None
+        self.dragged_pin_visual = None
+
         # Bind events
-        self.canvas.bind("<ButtonPress-2>", self.on_pan_start)
+        self.canvas.bind("<ButtonPress-1>", self.on_pin_press) # Left-click to start drag
+        self.canvas.bind("<ButtonPress-2>", self.on_pan_start) # Middle mouse for pan
         self.canvas.bind("<B2-Motion>", self.on_pan_move)
         self.canvas.bind("<MouseWheel>", self.on_zoom)
         self.canvas.bind("<Button-4>", self.on_zoom) # For Linux
         self.canvas.bind("<Button-5>", self.on_zoom) # For Linux
+        self.canvas.bind("<Button-3>", self.add_pin) # Right-click to add a pin
         
         self.load_map()
+
+    def on_pin_press(self, event):
+        """Selects a pin to be dragged."""
+        # Find the closest pin on the canvas to the click event
+        closest_pin_item = self.canvas.find_closest(event.x, event.y, halo=10, tags="pin_oval")
+        if not closest_pin_item:
+            return
+
+        # Extract the database pk from the tag
+        tags = self.canvas.gettags(closest_pin_item[0])
+        for tag in tags:
+            if tag.startswith("loc_pk_"):
+                self.dragged_pin_id = int(tag.split('_')[2])
+                self.dragged_pin_visual = closest_pin_item[0]
+                # Bind motion and release events for the drag operation
+                self.canvas.bind("<B1-Motion>", self.on_pin_drag)
+                self.canvas.bind("<ButtonRelease-1>", self.on_pin_drop)
+                break
+
+    def on_pin_drag(self, event):
+        """Moves the selected pin visual on the canvas."""
+        if self.dragged_pin_visual:
+            # Move the oval part of the pin
+            self.canvas.coords(self.dragged_pin_visual, event.x - 5, event.y - 5, event.x + 5, event.y + 5)
+            # Find the corresponding text and move it as well
+            text_item = self.canvas.find_withtag(f"text_for_{self.dragged_pin_id}")
+            if text_item:
+                self.canvas.coords(text_item[0], event.x, event.y - 10)
+
+    def on_pin_drop(self, event):
+        """Updates the pin's location in the database after dragging."""
+        if self.dragged_pin_id:
+            # Convert final canvas coordinates back to original image coordinates
+            new_image_x = self.view_x + event.x / self.zoom_level
+            new_image_y = self.view_y + event.y / self.zoom_level
+
+            # Update database
+            self.app.db.update_pin_location(self.dragged_pin_id, int(new_image_x), int(new_image_y))
+
+        # Cleanup
+        self.dragged_pin_id = None
+        self.dragged_pin_visual = None
+        self.canvas.unbind("<B1-Motion>")
+        self.canvas.unbind("<ButtonRelease-1>")
+        self.app.refresh_all_ui()
+
+    def add_pin(self, event):
+        """Callback to add a new pin at the clicked location."""
+        if not self.original_map_image:
+            messagebox.showwarning("No Map", "Cannot add a pin without a map loaded.", parent=self)
+            return
+
+        # Convert canvas coordinates to original image coordinates
+        image_x = self.view_x + event.x / self.zoom_level
+        image_y = self.view_y + event.y / self.zoom_level
+
+        # Ask for location name
+        loc_name = simpledialog.askstring("New Location", "Enter the name for this new location:", parent=self)
+        if not loc_name or not loc_name.strip():
+            return # User cancelled or entered empty name
+
+        # Determine the sietch
+        selected_sietch = self.sietch_filter_var.get()
+        if not selected_sietch or selected_sietch == "All":
+            messagebox.showerror("Sietch Required", "Please select a specific Sietch from the filter dropdown before adding a pin.", parent=self)
+            return
+
+        # Add to database
+        self.app.db.add_location(selected_sietch, loc_name.strip(), int(image_x), int(image_y))
+
+        # Refresh UI
+        self.app.refresh_all_ui()
 
     def load_map(self):
         map_path = self.app.db.get_config("main_map_path")
@@ -170,8 +247,12 @@ class MapFrame(ttk.Frame):
 
             # Only draw pin if it's visible on the current canvas
             if 0 < canvas_x < self.canvas.winfo_width() and 0 < canvas_y < self.canvas.winfo_height():
-                self.canvas.create_oval(canvas_x-5, canvas_y-5, canvas_x+5, canvas_y+5, fill="red", outline="white", tags="pin")
-                self.canvas.create_text(canvas_x, canvas_y - 10, text=loc_id, fill="white", tags="pin")
+                # Add specific tags for dragging and identification
+                pin_tags = ("pin", "pin_oval", f"loc_pk_{loc_pk}")
+                text_tags = ("pin", "pin_text", f"text_for_{loc_pk}")
+
+                self.canvas.create_oval(canvas_x-5, canvas_y-5, canvas_x+5, canvas_y+5, fill="red", outline="white", tags=pin_tags)
+                self.canvas.create_text(canvas_x, canvas_y - 10, text=loc_id, fill="white", tags=text_tags)
                 
     def on_pan_start(self, event):
         self.pan_start_x = event.x
@@ -213,3 +294,168 @@ class MapFrame(ttk.Frame):
     def update_filter_options(self):
         sietches = ["All"] + self.app.db.get_sietches()
         self.sietch_filter_menu['values'] = sietches
+
+class SietchOverviewFrame(ttk.Frame):
+    """A dedicated frame for displaying the detailed, collapsible sietch/location/object overview."""
+    def __init__(self, parent, app, **kwargs):
+        super().__init__(parent, **kwargs)
+        self.app = app
+        self.db = app.db
+
+        # This will be the main container for all the collapsible frames
+        self.container = ScrollableFrame(self)
+        self.container.pack(fill='both', expand=True)
+        self.content_frame = self.container.scrollable_frame
+
+    def refresh_overview(self):
+        """Clears and rebuilds the entire overview from the database."""
+        # Clear existing content
+        for widget in self.content_frame.winfo_children():
+            widget.destroy()
+
+        sietches = self.db.get_sietches()
+        if not sietches:
+            ttk.Label(self.content_frame, text="No Sietches found. Add one from the File menu.").pack(pady=10)
+            return
+
+        for sietch_name in sietches:
+            self.create_sietch_frame(sietch_name)
+
+    def create_sietch_frame(self, sietch_name):
+        """Creates the collapsible frame for a single sietch and its locations."""
+        sietch_frame = ttk.LabelFrame(self.content_frame, text=sietch_name, padding=10)
+        sietch_frame.pack(fill='x', expand=True, pady=5, padx=5)
+
+        # Fetch locations using their primary keys for future operations
+        locations = self.db.query("SELECT id, location_id FROM locations WHERE sietch_name=? ORDER BY location_id", (sietch_name,)).fetchall()
+
+        if not locations:
+            ttk.Label(sietch_frame, text="No locations in this sietch.").pack()
+        else:
+            for loc_pk, loc_id in locations:
+                self.create_location_frame(sietch_frame, loc_pk, loc_id)
+
+    def create_location_frame(self, parent_frame, loc_pk, loc_id):
+        """Creates the frame for a single location, including its status dot and objects."""
+        loc_frame = ttk.Frame(parent_frame, padding=5)
+        loc_frame.pack(fill='x', expand=True, pady=(5,2))
+
+        header_frame = ttk.Frame(loc_frame)
+        header_frame.pack(fill='x', expand=True)
+
+        ttk.Label(header_frame, text=loc_id, font=('Arial', 11, 'bold')).pack(side='left')
+
+        # --- Status Dot and Lowest Health ---
+        status = self.db.get_location_status(loc_pk)
+        last_updated_ts, lowest_health = status if status else (None, None)
+
+        status_dot_canvas = tk.Canvas(header_frame, width=12, height=12, highlightthickness=0)
+        status_dot_canvas.pack(side='left', padx=10)
+
+        dot_color = "#4b5563" # Gray for no data
+        if last_updated_ts:
+            age_hours = (datetime.datetime.now().timestamp() - last_updated_ts) / 3600
+            if self.db.query("SELECT COUNT(*) FROM history WHERE object_fk IN (SELECT id FROM objects WHERE location_fk=?)", (loc_pk,)).fetchone()[0] == 1:
+                dot_color = "#3b82f6" # Blue for single data point
+            elif age_hours <= 12:
+                dot_color = "#22c55e" # Green
+            elif age_hours <= 48:
+                dot_color = "#f59e0b" # Yellow
+            else:
+                dot_color = "#ef4444" # Red
+
+        status_dot_canvas.create_oval(2, 2, 10, 10, fill=dot_color, outline=dot_color)
+
+        if lowest_health is not None:
+            health_text = f" | Lowest Health: {lowest_health:.1f}%" if lowest_health > 0 else " | Lowest Health: Wrecked"
+            ttk.Label(header_frame, text=health_text).pack(side='left')
+
+        # --- Object Details ---
+        objects = self.db.get_objects_for_location(loc_pk)
+        if not objects:
+            ttk.Label(loc_frame, text="  No objects at this location.", style='Italic.TLabel').pack(anchor='w', padx=15)
+        else:
+            for obj_pk, obj_id, obj_img_path, base_hp in objects:
+                self.create_object_frame(loc_frame, obj_pk, obj_id, obj_img_path, base_hp)
+
+    def create_object_frame(self, parent_frame, obj_pk, obj_id, obj_img_path, base_hp):
+        """Creates the detailed, interactive frame for a single object."""
+        obj_container = ttk.LabelFrame(parent_frame, text=obj_id, padding=10)
+        obj_container.pack(fill='x', expand=True, padx=15, pady=5)
+
+        top_section = ttk.Frame(obj_container)
+        top_section.pack(fill='x', expand=True)
+
+        # Left side: User Image and Sub-map
+        left_panel = ttk.Frame(top_section)
+        left_panel.pack(side='left', padx=(0, 10))
+
+        # User-provided image
+        img_label = ttk.Label(left_panel, text="No Image")
+        img_label.pack(pady=5)
+        if obj_img_path and os.path.exists(obj_img_path):
+            try:
+                img = Image.open(obj_img_path)
+                img.thumbnail((150, 150))
+                self.app.photo_references[f"obj_{obj_pk}"] = ImageTk.PhotoImage(img)
+                img_label.config(image=self.app.photo_references[f"obj_{obj_pk}"])
+            except Exception as e:
+                img_label.config(text="Error loading image")
+                print(f"Error loading object image {obj_img_path}: {e}")
+
+        # Sub-map would be complex, adding a placeholder for now
+        ttk.Label(left_panel, text="Sub-map placeholder").pack(pady=5)
+
+        # Right side: History and controls
+        right_panel = ttk.Frame(top_section)
+        right_panel.pack(side='left', fill='x', expand=True)
+
+        # Decay Graph placeholder
+        graph_canvas = tk.Canvas(right_panel, height=60, bg="#2d3748")
+        graph_canvas.pack(fill='x', pady=5)
+        graph_canvas.create_text(10, 10, text="Decay graph to be implemented here.", fill='white', anchor='nw')
+
+        # History Frame
+        history_frame = ttk.Frame(right_panel)
+        history_frame.pack(fill='x', expand=True)
+        ttk.Label(history_frame, text="History:", font=('Arial', 10, 'bold')).pack(anchor='w')
+
+        history_records = self.db.get_history_for_object(obj_pk)
+        if not history_records:
+            ttk.Label(history_frame, text="No history records.").pack(anchor='w')
+        else:
+            for hist_pk, ts, health, path in history_records:
+                record_frame = ttk.Frame(history_frame)
+                record_frame.pack(fill='x', pady=2)
+
+                # Thumbnail of the center crop
+                thumb_label = ttk.Label(record_frame)
+                thumb_label.pack(side='left', padx=5)
+                if path and os.path.exists(path):
+                    try:
+                        thumb_img = Image.open(path)
+                        thumb_img.thumbnail((40, 40))
+                        self.app.photo_references[f"hist_{hist_pk}"] = ImageTk.PhotoImage(thumb_img)
+                        thumb_label.config(image=self.app.photo_references[f"hist_{hist_pk}"])
+                    except: pass
+
+                ts_str = datetime.datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M')
+                health_str = f"Health: {health}"
+                ttk.Label(record_frame, text=f"{ts_str} | {health_str}").pack(side='left', expand=True, fill='x')
+
+                # Buttons for interaction
+                ttk.Button(record_frame, text="Adjust", command=lambda h_pk=hist_pk: self.adjust_health(h_pk)).pack(side='right')
+                ttk.Button(record_frame, text="Remove", command=lambda h_pk=hist_pk: self.remove_history(h_pk)).pack(side='right', padx=5)
+
+    def adjust_health(self, hist_pk):
+        """Placeholder for the health adjustment UI."""
+        new_health = simpledialog.askstring("Adjust Health", "Enter new health value or 'wrecked':", parent=self)
+        if new_health is not None:
+            self.db.update_history_health(hist_pk, new_health.strip())
+            self.app.refresh_all_ui()
+
+    def remove_history(self, hist_pk):
+        """Removes a history point after confirmation."""
+        if messagebox.askyesno("Confirm Delete", "Are you sure you want to delete this data point? This cannot be undone.", parent=self):
+            self.db.delete_history_point(hist_pk)
+            self.app.refresh_all_ui()
