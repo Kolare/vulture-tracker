@@ -153,17 +153,21 @@ class MapFrame(ttk.Frame):
 
     def on_right_click(self, event):
         """Handles right-clicks on the canvas to either add a pin or show context menu."""
-        closest_item = self.canvas.find_closest(event.x, event.y, halo=10, tags="pin_oval")
-        if closest_item:
-            # Click was on a pin, show context menu
-            tags = self.canvas.gettags(closest_item[0])
+        closest_items = self.canvas.find_closest(event.x, event.y, halo=10)
+        if not closest_items:
+            self.add_pin(event)
+            return
+
+        closest_item_id = closest_items[0]
+        tags = self.canvas.gettags(closest_item_id)
+
+        if "pin_oval" in tags:
             for tag in tags:
                 if tag.startswith("loc_pk_"):
                     self.context_menu_pin_id = int(tag.split('_')[2])
                     self.pin_context_menu.tk_popup(event.x_root, event.y_root)
                     break
         else:
-            # Click was on empty space, add a new pin
             self.add_pin(event)
 
     def rename_pin(self):
@@ -195,18 +199,20 @@ class MapFrame(ttk.Frame):
 
     def on_pin_press(self, event):
         """Selects a pin to be dragged."""
-        # Find the closest pin on the canvas to the click event
-        closest_pin_item = self.canvas.find_closest(event.x, event.y, halo=10, tags="pin_oval")
-        if not closest_pin_item:
+        closest_items = self.canvas.find_closest(event.x, event.y, halo=10)
+        if not closest_items:
             return
 
-        # Extract the database pk from the tag
-        tags = self.canvas.gettags(closest_pin_item[0])
+        closest_item_id = closest_items[0]
+        tags = self.canvas.gettags(closest_item_id)
+
+        if "pin_oval" not in tags:
+            return
+
         for tag in tags:
             if tag.startswith("loc_pk_"):
                 self.dragged_pin_id = int(tag.split('_')[2])
-                self.dragged_pin_visual = closest_pin_item[0]
-                # Bind motion and release events for the drag operation
+                self.dragged_pin_visual = closest_item_id
                 self.canvas.bind("<B1-Motion>", self.on_pin_drag)
                 self.canvas.bind("<ButtonRelease-1>", self.on_pin_drop)
                 break
