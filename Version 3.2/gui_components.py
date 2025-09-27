@@ -583,11 +583,104 @@ class SietchOverviewFrame(ttk.Frame):
                 ttk.Button(record_frame, text="Remove", command=lambda h_pk=hist_pk: self.remove_history(h_pk)).pack(side='right', padx=5)
 
     def adjust_health(self, hist_pk):
-        """Placeholder for the health adjustment UI."""
-        new_health = simpledialog.askstring("Adjust Health", "Enter new health value or 'wrecked':", parent=self)
-        if new_health is not None:
-            self.db.update_history_health(hist_pk, new_health.strip())
+        """Opens a new window to visually adjust the health for a history point."""
+        HealthAdjustmentWindow(self, self.app, hist_pk)
+
+class HealthAdjustmentWindow(tk.Toplevel):
+    """A window for visually adjusting the health percentage on a screenshot."""
+    def __init__(self, parent, app, history_pk):
+        super().__init__(parent)
+        self.app = app
+        self.db = app.db
+        self.history_pk = history_pk
+        self.new_health_percent = None
+
+        self.title("Adjust Health")
+        self.transient(parent)
+        self.grab_set()
+
+        # Fetch data for this history record
+        history_data = self.db.query("SELECT screenshot_path, health_percent FROM history WHERE id=?", (self.history_pk,)).fetchone()
+        if not history_data or not history_data[0] or not os.path.exists(history_data[0]):
+            messagebox.showerror("Error", "Screenshot for this record not found.", parent=self)
+            self.destroy()
+            return
+
+        self.image_path = history_data[0]
+        self.original_health = history_data[1]
+        self.image_cv = cv2.imread(self.image_path)
+
+        # --- UI Elements ---
+        self.canvas = tk.Canvas(self, width=self.image_cv.shape[1], height=self.image_cv.shape[0], highlightthickness=0)
+        self.canvas.pack()
+
+        self.photo_image = ImageTk.PhotoImage(Image.fromarray(cv2.cvtColor(self.image_cv, cv2.COLOR_BGR2RGB)))
+        self.canvas.create_image(0, 0, anchor='nw', image=self.photo_image)
+
+        self.canvas.bind("<B1-Motion>", self.on_mouse_drag)
+        self.canvas.bind("<Button-1>", self.on_mouse_drag)
+
+        bottom_frame = ttk.Frame(self)
+        bottom_frame.pack(fill='x', padx=10, pady=10)
+
+        self.health_label_var = tk.StringVar(value=f"Current: {self.original_health}")
+        ttk.Label(bottom_frame, textvariable=self.health_label_var).pack(side='left')
+
+        ttk.Button(bottom_frame, text="Save", command=self.save_and_close).pack(side='right')
+        ttk.Button(bottom_frame, text="Cancel", command=self.destroy).pack(side='right', padx=5)
+
+        # Initial overlay draw
+        self.draw_overlay()
+
+    def draw_overlay(self, event=None):
+        """Draws the circle and health arc on the canvas."""
+        self.canvas.delete("overlay") # Clear old overlay items
+
+        h, w = self.image_cv.shape[:2]
+        center_x, center_y = w // 2, h // 2
+
+        # Draw scan path
+        for radius in self.app.analyzer.SAMPLE_RADII:
+            self.canvas.create_oval(center_x-radius, center_y-radius, center_x+radius, center_y+radius, outline="cyan", tags="overlay")
+
+        # Draw start line
+        self.canvas.create_line(center_x, center_y, center_x, center_y - self.app.analyzer.SAMPLE_RADII[-1], fill="green", width=2, tags="overlay")
+
+        # Draw current end line
+        health_to_draw = self.new_health_percent if self.new_health_percent is not None else (float(self.original_health) if self.original_health != 'wrecked' else 0)
+
+        if health_to_draw is not None:
+            end_angle_deg = (health_to_draw / 100.0) * 360.0
+            end_angle_rad = math.radians(end_angle_deg)
+            end_x = int(round(center_x + self.app.analyzer.SAMPLE_RADII[-1] * math.sin(end_angle_rad)))
+            end_y = int(round(center_y - self.app.analyzer.SAMPLE_RADII[-1] * math.cos(end_angle_rad)))
+            self.canvas.create_line(center_x, center_y, end_x, end_y, fill="red", width=2, tags="overlay")
+
+    def on_mouse_drag(self, event):
+        """Calculates health based on mouse position and redraws the overlay."""
+        h, w = self.image_cv.shape[:2]
+        center_x, center_y = w // 2, h // 2
+
+        # Calculate angle of the mouse relative to the center
+        dx = event.x - center_x
+        dy = center_y - event.y # Y is inverted in graphics
+
+        angle_rad = math.atan2(dy, dx)
+        angle_deg = math.degrees(angle_rad)
+
+        # Convert from atan2 range (-180 to 180) to 0-360 compass
+        final_angle = (90 - angle_deg) % 360
+
+        self.new_health_percent = (final_angle / 360.0) * 100
+        self.health_label_var.set(f"New: {self.new_health_percent:.1f}%")
+        self.draw_overlay()
+
+    def save_and_close(self):
+        """Saves the new health value to the database and closes the window."""
+        if self.new_health_percent is not None:
+            self.db.update_history_health(self.history_pk, f"{self.new_health_percent:.1f}")
             self.app.refresh_all_ui()
+        self.destroy()
 
     def remove_history(self, hist_pk):
         """Removes a history point after confirmation."""
