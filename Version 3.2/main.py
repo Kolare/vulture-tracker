@@ -260,7 +260,7 @@ class VultureTrackerApp:
         self.update_location_dropdown()
         self.refresh_priority_list()
         if hasattr(self, 'map_frame'):
-            self.map_frame.load_pins()
+            self.map_frame.redraw_canvas()
         if hasattr(self, 'overview_frame'):
             self.overview_frame.refresh_overview()
         
