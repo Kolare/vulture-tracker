@@ -430,15 +430,15 @@ class SietchOverviewFrame(ttk.Frame):
         sietch_frame = ttk.LabelFrame(self.content_frame, text=sietch_name, padding=10)
         sietch_frame.pack(fill='x', expand=True, pady=2, padx=5)
 
-        locations = self.db.query("SELECT id, location_id FROM locations WHERE sietch_name=? ORDER BY location_id", (sietch_name,)).fetchall()
+        locations = self.db.query("SELECT id, location_id, pin_x, pin_y FROM locations WHERE sietch_name=? ORDER BY location_id", (sietch_name,)).fetchall()
 
         if not locations:
             ttk.Label(sietch_frame, text="No locations in this sietch.", style='Italic.TLabel').pack()
         else:
-            for loc_pk, loc_id in locations:
-                self.create_location_frame(sietch_frame, loc_pk, loc_id)
+            for loc_pk, loc_id, pin_x, pin_y in locations:
+                self.create_location_frame(sietch_frame, loc_pk, loc_id, pin_x, pin_y)
 
-    def create_location_frame(self, parent_frame, loc_pk, loc_id):
+    def create_location_frame(self, parent_frame, loc_pk, loc_id, pin_x, pin_y):
         """Creates the collapsible frame for a single location and its objects."""
         loc_frame = ttk.Frame(parent_frame, style='Object.TFrame')
         loc_frame.pack(fill='x', expand=True, pady=(2,0))
@@ -481,9 +481,8 @@ class SietchOverviewFrame(ttk.Frame):
         status_dot_canvas.create_oval(2, 2, 10, 10, fill=dot_color, outline=dot_color)
 
         if lowest_health is not None:
-            # Calculate time to wreck for the location's most critical item
             time_to_wreck_str = ""
-            priority_list = self.db.get_priority_watch_list(limit=100) # Get a larger list to find our item
+            priority_list = self.db.get_priority_watch_list(limit=100)
             for item in priority_list:
                 if item['sietch'] == parent_frame.cget('text') and item['location'] == loc_id:
                     wreck_time = datetime.datetime.fromtimestamp(item['estimated_wreck_time'])
@@ -507,7 +506,7 @@ class SietchOverviewFrame(ttk.Frame):
             ttk.Label(objects_container, text="No objects at this location.", style='Italic.TLabel').pack(anchor='w')
         else:
             for obj_pk, obj_id, obj_img_path, base_hp in objects:
-                self.create_object_frame(objects_container, obj_pk, obj_id, obj_img_path, base_hp)
+                self.create_object_frame(objects_container, loc_pk, obj_pk, obj_id, obj_img_path, base_hp, pin_x, pin_y)
 
     def toggle_visibility(self, frame):
         """Shows or hides a frame."""
@@ -516,7 +515,7 @@ class SietchOverviewFrame(ttk.Frame):
         else:
             frame.pack(fill='x', expand=True)
 
-    def create_object_frame(self, parent_frame, obj_pk, obj_id, obj_img_path, base_hp):
+    def create_object_frame(self, parent_frame, loc_pk, obj_pk, obj_id, obj_img_path, base_hp, pin_x, pin_y):
         """Creates the detailed, interactive frame for a single object."""
         obj_container = ttk.LabelFrame(parent_frame, text=obj_id, padding=5)
         obj_container.pack(fill='x', expand=True, padx=0, pady=2)
@@ -541,8 +540,36 @@ class SietchOverviewFrame(ttk.Frame):
                 img_label.config(text="Error loading image")
                 print(f"Error loading object image {obj_img_path}: {e}")
 
-        # Sub-map would be complex, adding a placeholder for now
-        ttk.Label(left_panel, text="Sub-map placeholder").pack(pady=5)
+        # --- Sub-map implementation ---
+        sub_map_canvas = tk.Canvas(left_panel, width=150, height=150, bg="black", highlightthickness=0)
+        sub_map_canvas.pack(pady=5)
+
+        main_map_image = self.app.map_frame.original_map_image
+        if main_map_image and pin_x is not None and pin_y is not None:
+            try:
+                # Define the area to crop from the full-resolution main map
+                crop_width = 300 # How many pixels to grab from the big map
+                crop_x1 = pin_x - (crop_width // 2)
+                crop_y1 = pin_y - (crop_width // 2)
+                crop_x2 = pin_x + (crop_width // 2)
+                crop_y2 = pin_y + (crop_width // 2)
+
+                sub_map_crop = main_map_image.crop((crop_x1, crop_y1, crop_x2, crop_y2))
+
+                # Resize this crop to fit our small canvas
+                sub_map_resized = sub_map_crop.resize((150, 150), Image.Resampling.LANCZOS)
+
+                self.app.photo_references[f"submap_{loc_pk}"] = ImageTk.PhotoImage(sub_map_resized)
+                sub_map_canvas.create_image(0, 0, anchor='nw', image=self.app.photo_references[f"submap_{loc_pk}"])
+
+                # Draw a marker in the center to show the exact pin location
+                center = 150 / 2
+                sub_map_canvas.create_oval(center-3, center-3, center+3, center+3, fill='red', outline='white')
+            except Exception as e:
+                sub_map_canvas.create_text(75, 75, text="Error creating\nsub-map.", fill='white', anchor='center')
+                print(f"Error creating sub-map for loc_pk {loc_pk}: {e}")
+        else:
+            sub_map_canvas.create_text(75, 75, text="No pin set for\nthis location.", fill='white', anchor='center')
 
         # Right side: History and controls
         right_panel = ttk.Frame(top_section)
@@ -597,7 +624,7 @@ class HealthAdjustmentWindow(tk.Toplevel):
         self.db = app.db
         self.history_pk = history_pk
         self.new_health_percent = None
-        self.zoom_factor = 2.0  # Zoom by 200%
+        self.zoom_factor = 4.0  # Zoom by 400%
 
         self.title("Adjust Health")
         self.transient(parent)
@@ -642,15 +669,20 @@ class HealthAdjustmentWindow(tk.Toplevel):
         h, w = self.image_cv.shape[:2]
         center_x, center_y = w / 2, h / 2
 
-        # Use HealthAnalyzer class directly and scale radii
-        for radius in HealthAnalyzer.SAMPLE_RADII:
-            scaled_radius = radius * self.zoom_factor
-            self.canvas.create_oval(center_x - scaled_radius, center_y - scaled_radius, center_x + scaled_radius, center_y + scaled_radius, outline="cyan", tags="overlay")
+        health_to_draw = self.new_health_percent if self.new_health_percent is not None else (float(self.original_health) if self.original_health != 'wrecked' else 0)
+
+        # Draw the health arc
+        if health_to_draw is not None and health_to_draw > 0:
+            start_angle = 90 # 12 o'clock
+            extent_angle = - (health_to_draw / 100.0) * 360.0
+
+            for radius in HealthAnalyzer.SAMPLE_RADII:
+                scaled_radius = radius * self.zoom_factor
+                bbox = (center_x - scaled_radius, center_y - scaled_radius, center_x + scaled_radius, center_y + scaled_radius)
+                self.canvas.create_arc(bbox, start=start_angle, extent=extent_angle, style=tk.ARC, outline="cyan", width=1, tags="overlay")
 
         scaled_max_radius = HealthAnalyzer.SAMPLE_RADII[-1] * self.zoom_factor
         self.canvas.create_line(center_x, center_y, center_x, center_y - scaled_max_radius, fill="green", width=2, tags="overlay")
-
-        health_to_draw = self.new_health_percent if self.new_health_percent is not None else (float(self.original_health) if self.original_health != 'wrecked' else 0)
 
         if health_to_draw is not None:
             end_angle_deg = (health_to_draw / 100.0) * 360.0
