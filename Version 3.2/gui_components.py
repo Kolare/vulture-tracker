@@ -152,22 +152,26 @@ class MapFrame(ttk.Frame):
         self.load_map()
 
     def on_right_click(self, event):
-        """Handles right-clicks on the canvas to either add a pin or show context menu."""
-        closest_items = self.canvas.find_closest(event.x, event.y, halo=10)
-        if not closest_items:
-            self.add_pin(event)
-            return
+        """Handles right-clicks, prioritizing context menu on pins over adding new pins."""
+        items = self.canvas.find_overlapping(event.x - 2, event.y - 2, event.x + 2, event.y + 2)
 
-        closest_item_id = closest_items[0]
-        tags = self.canvas.gettags(closest_item_id)
+        found_pin = False
+        if items:
+            for item_id in reversed(items):
+                tags = self.canvas.gettags(item_id)
+                if "pin_oval" in tags:
+                    # Found a pin, show context menu
+                    for tag in tags:
+                        if tag.startswith("loc_pk_"):
+                            self.context_menu_pin_id = int(tag.split('_')[2])
+                            self.pin_context_menu.tk_popup(event.x_root, event.y_root)
+                            found_pin = True
+                            break # Stop inner loop
+                    if found_pin:
+                        break # Stop outer loop
 
-        if "pin_oval" in tags:
-            for tag in tags:
-                if tag.startswith("loc_pk_"):
-                    self.context_menu_pin_id = int(tag.split('_')[2])
-                    self.pin_context_menu.tk_popup(event.x_root, event.y_root)
-                    break
-        else:
+        if not found_pin:
+            # No pin was found in the click area, so add a new one
             self.add_pin(event)
 
     def rename_pin(self):
@@ -198,24 +202,21 @@ class MapFrame(ttk.Frame):
         self.context_menu_pin_id = None
 
     def on_pin_press(self, event):
-        """Selects a pin to be dragged."""
-        closest_items = self.canvas.find_closest(event.x, event.y, halo=10)
-        if not closest_items:
+        """Selects a pin to be dragged using an overlapping search."""
+        items = self.canvas.find_overlapping(event.x - 2, event.y - 2, event.x + 2, event.y + 2)
+        if not items:
             return
 
-        closest_item_id = closest_items[0]
-        tags = self.canvas.gettags(closest_item_id)
-
-        if "pin_oval" not in tags:
-            return
-
-        for tag in tags:
-            if tag.startswith("loc_pk_"):
-                self.dragged_pin_id = int(tag.split('_')[2])
-                self.dragged_pin_visual = closest_item_id
-                self.canvas.bind("<B1-Motion>", self.on_pin_drag)
-                self.canvas.bind("<ButtonRelease-1>", self.on_pin_drop)
-                break
+        for item_id in reversed(items):
+            tags = self.canvas.gettags(item_id)
+            if "pin_oval" in tags:
+                for tag in tags:
+                    if tag.startswith("loc_pk_"):
+                        self.dragged_pin_id = int(tag.split('_')[2])
+                        self.dragged_pin_visual = item_id
+                        self.canvas.bind("<B1-Motion>", self.on_pin_drag)
+                        self.canvas.bind("<ButtonRelease-1>", self.on_pin_drop)
+                        return # Exit after finding the first pin
 
     def on_pin_drag(self, event):
         """Moves the selected pin visual on the canvas."""
