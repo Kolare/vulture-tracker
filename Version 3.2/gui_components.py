@@ -15,14 +15,17 @@ class ScrollableFrame(ttk.Frame):
         self.canvas = tk.Canvas(self, bg="#1f2937", highlightthickness=0)
         scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
         self.scrollable_frame = ttk.Frame(self.canvas)
+        self.window = self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+
+        # This binding ensures the inner frame resizes horizontally with the canvas
+        self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfig(self.window, width=e.width))
+        # This binding updates the scrollregion when the inner frame's content changes
         self.scrollable_frame.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
 
         # Bind mouse wheel scrolling to the canvas
         self.canvas.bind_all("<MouseWheel>", self._on_mousewheel) # Windows
         self.canvas.bind_all("<Button-4>", self._on_mousewheel) # Linux scroll up
         self.canvas.bind_all("<Button-5>", self._on_mousewheel) # Linux scroll down
-
-        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
         self.canvas.configure(yscrollcommand=scrollbar.set)
         self.canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
@@ -132,8 +135,8 @@ class MapFrame(ttk.Frame):
         self.sietch_filter_menu.bind("<<ComboboxSelected>>", self.redraw_canvas)
 
         self.canvas = tk.Canvas(self, bg="black", highlightthickness=0)
-        self.canvas.pack(fill='x')
-        
+        self.canvas.pack(fill='both', expand=True)
+
         self.dragged_pin_id = None
         self.dragged_pin_visual = None
 
@@ -405,21 +408,16 @@ class SietchOverviewFrame(ttk.Frame):
         super().__init__(parent, **kwargs)
         self.app = app
         self.db = app.db
-
-        # This will be the main container for all the collapsible frames
-        self.container = ScrollableFrame(self)
-        self.container.pack(fill='both', expand=True)
-        self.content_frame = self.container.scrollable_frame
+        # This component no longer needs its own scrollbar, as its parent is now the scrollable frame.
 
     def refresh_overview(self):
         """Clears and rebuilds the entire overview from the database."""
-        # Clear existing content
-        for widget in self.content_frame.winfo_children():
+        for widget in self.winfo_children():
             widget.destroy()
 
         sietches = self.db.get_sietches()
         if not sietches:
-            ttk.Label(self.content_frame, text="No Sietches found. Add one from the File menu.").pack(pady=10)
+            ttk.Label(self, text="No Sietches found. Add one from the File menu.").pack(pady=10)
             return
 
         for sietch_name in sietches:
@@ -427,7 +425,7 @@ class SietchOverviewFrame(ttk.Frame):
 
     def create_sietch_frame(self, sietch_name):
         """Creates the collapsible frame for a single sietch and its locations."""
-        sietch_frame = ttk.LabelFrame(self.content_frame, text=sietch_name, padding=10)
+        sietch_frame = ttk.LabelFrame(self, text=sietch_name, padding=10)
         sietch_frame.pack(fill='x', expand=True, pady=2, padx=5)
 
         locations = self.db.query("SELECT id, location_id, pin_x, pin_y FROM locations WHERE sietch_name=? ORDER BY location_id", (sietch_name,)).fetchall()
@@ -615,6 +613,12 @@ class SietchOverviewFrame(ttk.Frame):
     def adjust_health(self, hist_pk):
         """Opens a new window to visually adjust the health for a history point."""
         HealthAdjustmentWindow(self, self.app, hist_pk)
+
+    def remove_history(self, hist_pk):
+        """Removes a history point after confirmation."""
+        if messagebox.askyesno("Confirm Delete", "Are you sure you want to delete this data point? This cannot be undone.", parent=self):
+            self.db.delete_history_point(hist_pk)
+            self.app.refresh_all_ui()
 
 class HealthAdjustmentWindow(tk.Toplevel):
     """A window for visually adjusting the health percentage on a screenshot."""
