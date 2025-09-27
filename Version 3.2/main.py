@@ -71,40 +71,37 @@ class VultureTrackerApp:
         file_menu.add_command(label="Exit", command=self.on_closing)
 
         # Main layout frames
-        top_frame = ttk.Frame(self.root)
-        top_frame.pack(fill='x', pady=10, padx=10)
+        main_container = ttk.Frame(self.root, padding=10)
+        main_container.pack(fill='both', expand=True)
 
-        bottom_frame = ttk.Frame(self.root)
-        bottom_frame.pack(fill='both', expand=True, padx=10, pady=(0,10))
+        # Create a PanedWindow for resizable columns
+        paned_window = ttk.PanedWindow(main_container, orient=tk.HORIZONTAL)
+        paned_window.pack(fill='both', expand=True)
 
-        # Configure resizing behavior
-        self.root.grid_rowconfigure(1, weight=1)
-        self.root.grid_columnconfigure(0, weight=1)
+        # Left frame for the map (Map Panel)
+        self.left_frame = ttk.Frame(paned_window, width=800)
+        paned_window.add(self.left_frame, weight=3) # 60% initial width
 
-        # --- Top Frame Content ---
-        map_frame_container = ttk.Frame(top_frame, width=800)
-        map_frame_container.pack(side='left', fill='x', expand=True, padx=(0, 10))
+        # Right frame for the data (Data Column)
+        self.right_frame = ScrollableFrame(paned_window)
+        paned_window.add(self.right_frame, weight=2) # 40% initial width
+        self.right_content_frame = self.right_frame.scrollable_frame
 
-        self.map_frame = MapFrame(map_frame_container, self)
-        self.map_frame.pack(fill='x')
+        # --- Map Panel Content (Left) ---
+        self.map_frame = MapFrame(self.left_frame, self)
+        self.map_frame.pack(fill='both', expand=True)
 
-        priority_list_container = ttk.Frame(top_frame, width=400)
-        priority_list_container.pack(side='right', fill='y')
-
-        ttk.Label(priority_list_container, text="Priority Watch List", font=('Arial', 14, 'bold')).pack(anchor='n')
-        self.priority_list_frame = ttk.Frame(priority_list_container, padding=5)
-        self.priority_list_frame.pack(fill='both', expand=True)
-
-        # --- Bottom Frame Content (Sietch Overview) ---
-        self.overview_frame = SietchOverviewFrame(bottom_frame, self)
-        self.overview_frame.pack(fill='both', expand=True)
-
-        # --- Data Entry Form ---
-        # We will keep the capture form in a less prominent place for now
-        # Let's put it in a small frame in the priority list area
-        form_frame = ttk.Frame(priority_list_container, padding=10)
-        form_frame.pack(fill='x', pady=(10,0), side='bottom')
+        form_frame = ttk.Frame(self.left_frame, padding=10)
+        form_frame.pack(fill='x', side='bottom')
         ttk.Label(form_frame, text="Captured Data Point").grid(row=0, columnspan=2, pady=5, sticky='w')
+
+        # --- Data Column Content (Right) ---
+        ttk.Label(self.right_content_frame, text="Priority Watch List", font=('Arial', 14, 'bold')).pack(anchor='n', pady=5)
+        self.priority_list_frame = ttk.Frame(self.right_content_frame, padding=5)
+        self.priority_list_frame.pack(fill='x', expand=True, pady=(0, 10))
+
+        self.overview_frame = SietchOverviewFrame(self.right_content_frame, self)
+        self.overview_frame.pack(fill='both', expand=True)
         self.sietch_var, self.location_var, self.object_id_var = tk.StringVar(), tk.StringVar(), tk.StringVar()
         ttk.Label(form_frame, text="Sietch:").grid(row=1, column=0, sticky='w', pady=2)
         self.sietch_menu = ttk.Combobox(form_frame, textvariable=self.sietch_var, state="readonly", width=15)
