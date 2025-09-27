@@ -4,6 +4,8 @@ from PIL import Image, ImageTk
 import os
 import shutil
 import datetime
+import cv2
+import math
 
 class ScrollableFrame(ttk.Frame):
     # (This class remains unchanged)
