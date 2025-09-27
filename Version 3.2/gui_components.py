@@ -508,7 +508,7 @@ class SietchOverviewFrame(ttk.Frame):
 
     def create_object_frame(self, parent_frame, obj_pk, obj_id, obj_img_path, base_hp):
         """Creates the detailed, interactive frame for a single object."""
-        obj_container = ttk.LabelFrame(parent_frame, text=obj_id, padding=5, style='Overview.TLabelFrame')
+        obj_container = ttk.LabelFrame(parent_frame, text=obj_id, padding=5)
         obj_container.pack(fill='x', expand=True, padx=0, pady=2)
 
         top_section = ttk.Frame(obj_container)
