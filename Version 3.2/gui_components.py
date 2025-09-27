@@ -6,6 +6,7 @@ import shutil
 import datetime
 import cv2
 import math
+from analyzer import HealthAnalyzer
 
 class ScrollableFrame(ttk.Frame):
     # (This class remains unchanged)
@@ -596,12 +597,12 @@ class HealthAdjustmentWindow(tk.Toplevel):
         self.db = app.db
         self.history_pk = history_pk
         self.new_health_percent = None
+        self.zoom_factor = 2.0  # Zoom by 200%
 
         self.title("Adjust Health")
         self.transient(parent)
         self.grab_set()
 
-        # Fetch data for this history record
         history_data = self.db.query("SELECT screenshot_path, health_percent FROM history WHERE id=?", (self.history_pk,)).fetchone()
         if not history_data or not history_data[0] or not os.path.exists(history_data[0]):
             messagebox.showerror("Error", "Screenshot for this record not found.", parent=self)
@@ -610,9 +611,11 @@ class HealthAdjustmentWindow(tk.Toplevel):
 
         self.image_path = history_data[0]
         self.original_health = history_data[1]
-        self.image_cv = cv2.imread(self.image_path)
+        original_image_cv = cv2.imread(self.image_path)
 
-        # --- UI Elements ---
+        # Resize image for zoom
+        self.image_cv = cv2.resize(original_image_cv, (0,0), fx=self.zoom_factor, fy=self.zoom_factor, interpolation=cv2.INTER_NEAREST)
+
         self.canvas = tk.Canvas(self, width=self.image_cv.shape[1], height=self.image_cv.shape[0], highlightthickness=0)
         self.canvas.pack()
 
@@ -631,46 +634,41 @@ class HealthAdjustmentWindow(tk.Toplevel):
         ttk.Button(bottom_frame, text="Save", command=self.save_and_close).pack(side='right')
         ttk.Button(bottom_frame, text="Cancel", command=self.destroy).pack(side='right', padx=5)
 
-        # Initial overlay draw
         self.draw_overlay()
 
     def draw_overlay(self, event=None):
-        """Draws the circle and health arc on the canvas."""
-        self.canvas.delete("overlay") # Clear old overlay items
+        self.canvas.delete("overlay")
 
         h, w = self.image_cv.shape[:2]
-        center_x, center_y = w // 2, h // 2
+        center_x, center_y = w / 2, h / 2
 
-        # Draw scan path
-        for radius in self.app.analyzer.SAMPLE_RADII:
-            self.canvas.create_oval(center_x-radius, center_y-radius, center_x+radius, center_y+radius, outline="cyan", tags="overlay")
+        # Use HealthAnalyzer class directly and scale radii
+        for radius in HealthAnalyzer.SAMPLE_RADII:
+            scaled_radius = radius * self.zoom_factor
+            self.canvas.create_oval(center_x - scaled_radius, center_y - scaled_radius, center_x + scaled_radius, center_y + scaled_radius, outline="cyan", tags="overlay")
 
-        # Draw start line
-        self.canvas.create_line(center_x, center_y, center_x, center_y - self.app.analyzer.SAMPLE_RADII[-1], fill="green", width=2, tags="overlay")
+        scaled_max_radius = HealthAnalyzer.SAMPLE_RADII[-1] * self.zoom_factor
+        self.canvas.create_line(center_x, center_y, center_x, center_y - scaled_max_radius, fill="green", width=2, tags="overlay")
 
-        # Draw current end line
         health_to_draw = self.new_health_percent if self.new_health_percent is not None else (float(self.original_health) if self.original_health != 'wrecked' else 0)
 
         if health_to_draw is not None:
             end_angle_deg = (health_to_draw / 100.0) * 360.0
             end_angle_rad = math.radians(end_angle_deg)
-            end_x = int(round(center_x + self.app.analyzer.SAMPLE_RADII[-1] * math.sin(end_angle_rad)))
-            end_y = int(round(center_y - self.app.analyzer.SAMPLE_RADII[-1] * math.cos(end_angle_rad)))
+            end_x = center_x + scaled_max_radius * math.sin(end_angle_rad)
+            end_y = center_y - scaled_max_radius * math.cos(end_angle_rad)
             self.canvas.create_line(center_x, center_y, end_x, end_y, fill="red", width=2, tags="overlay")
 
     def on_mouse_drag(self, event):
-        """Calculates health based on mouse position and redraws the overlay."""
         h, w = self.image_cv.shape[:2]
-        center_x, center_y = w // 2, h // 2
+        center_x, center_y = w / 2, h / 2
 
-        # Calculate angle of the mouse relative to the center
         dx = event.x - center_x
-        dy = center_y - event.y # Y is inverted in graphics
+        dy = center_y - event.y
 
         angle_rad = math.atan2(dy, dx)
         angle_deg = math.degrees(angle_rad)
 
-        # Convert from atan2 range (-180 to 180) to 0-360 compass
         final_angle = (90 - angle_deg) % 360
 
         self.new_health_percent = (final_angle / 360.0) * 100
