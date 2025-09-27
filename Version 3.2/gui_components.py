@@ -417,7 +417,7 @@ class SietchOverviewFrame(ttk.Frame):
 
     def create_sietch_frame(self, sietch_name):
         """Creates the collapsible frame for a single sietch and its locations."""
-        sietch_frame = ttk.LabelFrame(self.content_frame, text=sietch_name, padding=10, style='Overview.TLabelFrame')
+        sietch_frame = ttk.LabelFrame(self.content_frame, text=sietch_name, padding=10)
         sietch_frame.pack(fill='x', expand=True, pady=2, padx=5)
 
         locations = self.db.query("SELECT id, location_id FROM locations WHERE sietch_name=? ORDER BY location_id", (sietch_name,)).fetchall()

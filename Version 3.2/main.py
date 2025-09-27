@@ -54,8 +54,8 @@ class VultureTrackerApp:
         style.map('TButton', background=[('active', '#4b5563')]) # Cool Gray 600
 
         # Special styling for overview components
-        style.configure('Overview.TLabelFrame', background=self.bg_color)
-        style.configure('Overview.TLabelFrame.Label', background=self.bg_color, foreground=self.fg_color, font=('Arial', 12, 'bold'))
+        style.configure('TLabelFrame', background=self.bg_color)
+        style.configure('TLabelFrame.Label', background=self.bg_color, foreground=self.fg_color, font=('Arial', 12, 'bold'))
         style.configure('Location.TFrame', background=self.accent_color)
         style.configure('Object.TFrame', background=self.bg_color)
         style.configure('Italic.TLabel', font=('Arial', 9, 'italic'), foreground="#9ca3af") # Cool Gray 400
