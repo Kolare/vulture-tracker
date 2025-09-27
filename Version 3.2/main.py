@@ -30,6 +30,7 @@ class VultureTrackerApp:
 
         self.setup_styles()
         self.create_widgets()
+        self.load_recent_base_hp() # Load recent values on startup
         self.refresh_all_ui()
         
         start_hotkey_listener(self.capture_queue, self.log_error)
@@ -37,8 +38,27 @@ class VultureTrackerApp:
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
     def setup_styles(self):
-        # Full styling would be implemented here
-        pass
+        """Defines the color scheme and styles for the application's widgets."""
+        self.bg_color = "#1f2937"  # Cool Gray 800
+        self.fg_color = "#f3f4f6"  # Cool Gray 100 (Eggshell)
+        self.accent_color = "#374151" # Cool Gray 700
+
+        style = ttk.Style()
+        style.theme_use('clam')
+
+        # General widget styling
+        style.configure('.', background=self.bg_color, foreground=self.fg_color)
+        style.configure('TFrame', background=self.bg_color)
+        style.configure('TLabel', background=self.bg_color, foreground=self.fg_color, padding=3)
+        style.configure('TButton', background=self.accent_color, foreground=self.fg_color)
+        style.map('TButton', background=[('active', '#4b5563')]) # Cool Gray 600
+
+        # Special styling for overview components
+        style.configure('Overview.TLabelFrame', background=self.bg_color)
+        style.configure('Overview.TLabelFrame.Label', background=self.bg_color, foreground=self.fg_color, font=('Arial', 12, 'bold'))
+        style.configure('Location.TFrame', background=self.accent_color)
+        style.configure('Object.TFrame', background=self.bg_color)
+        style.configure('Italic.TLabel', font=('Arial', 9, 'italic'), foreground="#9ca3af") # Cool Gray 400
 
     def create_widgets(self):
         menubar = tk.Menu(self.root)
@@ -53,7 +73,7 @@ class VultureTrackerApp:
         # Main layout frames
         top_frame = ttk.Frame(self.root)
         top_frame.pack(fill='x', pady=10, padx=10)
-        
+
         bottom_frame = ttk.Frame(self.root)
         bottom_frame.pack(fill='both', expand=True, padx=10, pady=(0,10))
 
@@ -78,7 +98,7 @@ class VultureTrackerApp:
         # --- Bottom Frame Content (Sietch Overview) ---
         self.overview_frame = SietchOverviewFrame(bottom_frame, self)
         self.overview_frame.pack(fill='both', expand=True)
-        
+
         # --- Data Entry Form ---
         # We will keep the capture form in a less prominent place for now
         # Let's put it in a small frame in the priority list area
@@ -95,10 +115,16 @@ class VultureTrackerApp:
         self.location_menu.grid(row=2, column=1, sticky='ew')
         ttk.Label(form_frame, text="Object ID:").grid(row=3, column=0, sticky='w', pady=2)
         ttk.Entry(form_frame, textvariable=self.object_id_var).grid(row=3, column=1, sticky='ew')
+
+        ttk.Label(form_frame, text="Base HP (Opt.):").grid(row=4, column=0, sticky='w', pady=2)
+        self.base_hp_var = tk.StringVar()
+        self.base_hp_combo = ttk.Combobox(form_frame, textvariable=self.base_hp_var)
+        self.base_hp_combo.grid(row=4, column=1, sticky='ew')
+
         self.capture_preview_label = ttk.Label(form_frame, text="Press Ctrl+Shift+H in-game...")
-        self.capture_preview_label.grid(row=4, columnspan=2, pady=10)
+        self.capture_preview_label.grid(row=5, columnspan=2, pady=10)
         self.save_button = ttk.Button(form_frame, text="Save Captured Data", command=self.save_captured_data, state="disabled")
-        self.save_button.grid(row=5, columnspan=2, sticky='ew', pady=5)
+        self.save_button.grid(row=6, columnspan=2, sticky='ew', pady=5)
 
     def open_sietch_manager(self):
         """Opens the new Toplevel window for managing sietches."""
@@ -140,10 +166,11 @@ class VultureTrackerApp:
         print(f"Captured data ready in form: Health {health}")
 
     def save_captured_data(self):
-        """Saves the captured data point to the database using the selected UI values."""
+        """Saves the captured data point and updates the Base HP if provided."""
         sietch = self.sietch_var.get()
         location_id = self.location_var.get()
         object_id = self.object_id_var.get().strip()
+        base_hp_str = self.base_hp_var.get().strip()
 
         if not all([sietch, location_id, object_id]):
             messagebox.showerror("Error", "Sietch, Location, and Object ID are required.")
@@ -153,20 +180,44 @@ class VultureTrackerApp:
             messagebox.showerror("Error", "No captured data to save.")
             return
 
-        # Ensure the location exists before trying to save
         self.db.add_location(sietch, location_id)
-
-        # Pass the required IDs and the entire analysis_result dictionary
         success, message = self.db.save_data_point(sietch, location_id, object_id, self.last_capture_data)
 
         if success:
+            if base_hp_str.isdigit():
+                obj_pk = self.db.query("SELECT id FROM objects WHERE location_fk=(SELECT id FROM locations WHERE sietch_name=? AND location_id=?) AND object_id=?", (sietch, location_id, object_id)).fetchone()[0]
+                self.db.set_object_base_hp(obj_pk, int(base_hp_str))
+                self.update_recent_base_hp(base_hp_str)
+
             messagebox.showinfo("Success", "Data point saved successfully!")
             self.last_capture_data = None
             self.save_button.config(state="disabled")
             self.object_id_var.set("")
+            self.base_hp_var.set("")
             self.refresh_all_ui()
         else:
             messagebox.showerror("Database Error", message)
+
+    def load_recent_base_hp(self):
+        """Loads the recent Base HP values into the combobox."""
+        recent_hp_str = self.db.get_config("recent_base_hp")
+        if recent_hp_str:
+            self.base_hp_combo['values'] = recent_hp_str.split(',')
+
+    def update_recent_base_hp(self, new_hp):
+        """Adds a new HP value to the recent list, keeping it at 5 unique entries."""
+        current_values = self.base_hp_combo['values']
+        if isinstance(current_values, str):
+            current_values = list(current_values.split(','))
+
+        if new_hp in current_values:
+            current_values.remove(new_hp)
+
+        updated_values = [new_hp] + current_values
+        updated_values = updated_values[:5] # Keep only the top 5
+
+        self.db.set_config("recent_base_hp", ",".join(updated_values))
+        self.base_hp_combo['values'] = updated_values
     
     def refresh_priority_list(self):
         """Fetches and displays the top 10 most urgent items."""

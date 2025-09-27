@@ -1,7 +1,9 @@
 import tkinter as tk
-from tkinter import ttk, simpledialog, messagebox
+from tkinter import ttk, simpledialog, messagebox, filedialog
 from PIL import Image, ImageTk
 import os
+import shutil
+import datetime
 
 class ScrollableFrame(ttk.Frame):
     # (This class remains unchanged)
@@ -11,10 +13,27 @@ class ScrollableFrame(ttk.Frame):
         scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
         self.scrollable_frame = ttk.Frame(self.canvas)
         self.scrollable_frame.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+
+        # Bind mouse wheel scrolling to the canvas
+        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel) # Windows
+        self.canvas.bind_all("<Button-4>", self._on_mousewheel) # Linux scroll up
+        self.canvas.bind_all("<Button-5>", self._on_mousewheel) # Linux scroll down
+
         self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
         self.canvas.configure(yscrollcommand=scrollbar.set)
         self.canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
+
+    def _on_mousewheel(self, event):
+        """Cross-platform mouse wheel scroll event."""
+        # Check if the mouse is over this specific canvas
+        if not str(self.canvas.winfo_containing(event.x_root, event.y_root)).startswith(str(self.canvas)):
+            return
+
+        if event.num == 5 or event.delta == -120:
+            self.canvas.yview_scroll(1, "units")
+        if event.num == 4 or event.delta == 120:
+            self.canvas.yview_scroll(-1, "units")
 
 class SietchManagerWindow(tk.Toplevel):
     """A Toplevel window for adding, renaming, and deleting sietches."""
@@ -122,9 +141,57 @@ class MapFrame(ttk.Frame):
         self.canvas.bind("<MouseWheel>", self.on_zoom)
         self.canvas.bind("<Button-4>", self.on_zoom) # For Linux
         self.canvas.bind("<Button-5>", self.on_zoom) # For Linux
-        self.canvas.bind("<Button-3>", self.add_pin) # Right-click to add a pin
+        self.canvas.bind("<Button-3>", self.on_right_click) # General right-click handler
+
+        # Create the context menu but don't show it yet
+        self.pin_context_menu = tk.Menu(self.canvas, tearoff=0)
+        self.pin_context_menu.add_command(label="Rename Location", command=self.rename_pin)
+        self.pin_context_menu.add_command(label="Delete Location", command=self.delete_pin)
+        self.context_menu_pin_id = None
         
         self.load_map()
+
+    def on_right_click(self, event):
+        """Handles right-clicks on the canvas to either add a pin or show context menu."""
+        closest_item = self.canvas.find_closest(event.x, event.y, halo=10, tags="pin_oval")
+        if closest_item:
+            # Click was on a pin, show context menu
+            tags = self.canvas.gettags(closest_item[0])
+            for tag in tags:
+                if tag.startswith("loc_pk_"):
+                    self.context_menu_pin_id = int(tag.split('_')[2])
+                    self.pin_context_menu.tk_popup(event.x_root, event.y_root)
+                    break
+        else:
+            # Click was on empty space, add a new pin
+            self.add_pin(event)
+
+    def rename_pin(self):
+        """Renames the location associated with the context-clicked pin."""
+        if self.context_menu_pin_id is None: return
+
+        loc_pk = self.context_menu_pin_id
+        old_name = self.app.db.get_location_name(loc_pk)
+        new_name = simpledialog.askstring("Rename Location", f"Enter new name for '{old_name}':", parent=self)
+
+        if new_name and new_name.strip() and new_name.strip() != old_name:
+            success, msg = self.app.db.rename_location(loc_pk, new_name.strip())
+            if success:
+                self.app.refresh_all_ui()
+            else:
+                messagebox.showerror("Error", msg, parent=self)
+        self.context_menu_pin_id = None
+
+    def delete_pin(self):
+        """Deletes the location associated with the context-clicked pin."""
+        if self.context_menu_pin_id is None: return
+
+        loc_pk = self.context_menu_pin_id
+        loc_name = self.app.db.get_location_name(loc_pk)
+        if messagebox.askyesno("Confirm Delete", f"Are you sure you want to delete the location '{loc_name}' and all its objects? This is irreversible.", parent=self):
+            self.app.db.delete_location(loc_pk)
+            self.app.refresh_all_ui()
+        self.context_menu_pin_id = None
 
     def on_pin_press(self, event):
         """Selects a pin to be dragged."""
@@ -263,18 +330,28 @@ class MapFrame(ttk.Frame):
         dy = event.y - self.pan_start_y
         self.view_x -= dx / self.zoom_level
         self.view_y -= dy / self.zoom_level
+
+        # Clamp the view to the image boundaries
+        self.clamp_view()
+
         self.pan_start_x = event.x
         self.pan_start_y = event.y
         self.redraw_canvas()
 
     def on_zoom(self, event):
+        if not self.original_map_image: return
         scale_factor = 1.2
+
         if (event.delta > 0 or event.num == 4): # Zoom in
             new_zoom = self.zoom_level * scale_factor
         elif (event.delta < 0 or event.num == 5): # Zoom out
             new_zoom = self.zoom_level / scale_factor
         else:
             return
+
+        # Clamp zoom level
+        min_zoom = max(self.canvas.winfo_width() / self.original_map_image.width, self.canvas.winfo_height() / self.original_map_image.height)
+        new_zoom = max(min_zoom, min(new_zoom, 10.0)) # Min zoom fills canvas, max is 10x
 
         # Get mouse position relative to the canvas
         mouse_x, mouse_y = event.x, event.y
@@ -289,7 +366,24 @@ class MapFrame(ttk.Frame):
         self.view_x = image_x - mouse_x / self.zoom_level
         self.view_y = image_y - mouse_y / self.zoom_level
         
+        self.clamp_view()
         self.redraw_canvas()
+
+    def clamp_view(self):
+        """Ensures the view stays within the map boundaries."""
+        if not self.original_map_image: return
+
+        canvas_width = self.canvas.winfo_width()
+        canvas_height = self.canvas.winfo_height()
+
+        crop_w = canvas_width / self.zoom_level
+        crop_h = canvas_height / self.zoom_level
+
+        max_x = self.original_map_image.width - crop_w
+        max_y = self.original_map_image.height - crop_h
+
+        self.view_x = max(0, min(self.view_x, max_x))
+        self.view_y = max(0, min(self.view_y, max_y))
 
     def update_filter_options(self):
         sietches = ["All"] + self.app.db.get_sietches()
@@ -323,65 +417,99 @@ class SietchOverviewFrame(ttk.Frame):
 
     def create_sietch_frame(self, sietch_name):
         """Creates the collapsible frame for a single sietch and its locations."""
-        sietch_frame = ttk.LabelFrame(self.content_frame, text=sietch_name, padding=10)
-        sietch_frame.pack(fill='x', expand=True, pady=5, padx=5)
+        sietch_frame = ttk.LabelFrame(self.content_frame, text=sietch_name, padding=10, style='Overview.TLabelFrame')
+        sietch_frame.pack(fill='x', expand=True, pady=2, padx=5)
 
-        # Fetch locations using their primary keys for future operations
         locations = self.db.query("SELECT id, location_id FROM locations WHERE sietch_name=? ORDER BY location_id", (sietch_name,)).fetchall()
 
         if not locations:
-            ttk.Label(sietch_frame, text="No locations in this sietch.").pack()
+            ttk.Label(sietch_frame, text="No locations in this sietch.", style='Italic.TLabel').pack()
         else:
             for loc_pk, loc_id in locations:
                 self.create_location_frame(sietch_frame, loc_pk, loc_id)
 
     def create_location_frame(self, parent_frame, loc_pk, loc_id):
-        """Creates the frame for a single location, including its status dot and objects."""
-        loc_frame = ttk.Frame(parent_frame, padding=5)
-        loc_frame.pack(fill='x', expand=True, pady=(5,2))
+        """Creates the collapsible frame for a single location and its objects."""
+        loc_frame = ttk.Frame(parent_frame, style='Object.TFrame')
+        loc_frame.pack(fill='x', expand=True, pady=(2,0))
 
-        header_frame = ttk.Frame(loc_frame)
+        header_frame = ttk.Frame(loc_frame, style='Location.TFrame', cursor="hand2")
         header_frame.pack(fill='x', expand=True)
 
-        ttk.Label(header_frame, text=loc_id, font=('Arial', 11, 'bold')).pack(side='left')
+        objects_container = ttk.Frame(loc_frame, padding=(10, 5, 0, 0))
 
-        # --- Status Dot and Lowest Health ---
+        def toggle(event):
+            self.toggle_visibility(objects_container)
+
+        header_frame.bind("<Button-1>", toggle)
+
+        label = ttk.Label(header_frame, text=loc_id, font=('Arial', 11, 'bold'))
+        label.pack(side='left', padx=(5,0))
+        label.bind("<Button-1>", toggle)
+
         status = self.db.get_location_status(loc_pk)
         last_updated_ts, lowest_health = status if status else (None, None)
 
-        status_dot_canvas = tk.Canvas(header_frame, width=12, height=12, highlightthickness=0)
+        status_dot_canvas = tk.Canvas(header_frame, width=12, height=12, highlightthickness=0, bg=self.app.accent_color)
         status_dot_canvas.pack(side='left', padx=10)
+        status_dot_canvas.bind("<Button-1>", toggle)
 
         dot_color = "#4b5563" # Gray for no data
         if last_updated_ts:
-            age_hours = (datetime.datetime.now().timestamp() - last_updated_ts) / 3600
-            if self.db.query("SELECT COUNT(*) FROM history WHERE object_fk IN (SELECT id FROM objects WHERE location_fk=?)", (loc_pk,)).fetchone()[0] == 1:
+            now_ts = datetime.datetime.now().timestamp()
+            history_counts = self.db.query("SELECT COUNT(h.id) FROM history h JOIN objects o ON h.object_fk = o.id WHERE o.location_fk = ?", (loc_pk,)).fetchone()
+            total_history_points = history_counts[0] if history_counts else 0
+
+            if total_history_points <= 1:
                 dot_color = "#3b82f6" # Blue for single data point
-            elif age_hours <= 12:
-                dot_color = "#22c55e" # Green
-            elif age_hours <= 48:
-                dot_color = "#f59e0b" # Yellow
             else:
-                dot_color = "#ef4444" # Red
+                age_hours = (now_ts - last_updated_ts) / 3600
+                if age_hours <= 12: dot_color = "#22c55e" # Green
+                elif age_hours <= 48: dot_color = "#f59e0b" # Yellow
+                else: dot_color = "#ef4444" # Red
 
         status_dot_canvas.create_oval(2, 2, 10, 10, fill=dot_color, outline=dot_color)
 
         if lowest_health is not None:
-            health_text = f" | Lowest Health: {lowest_health:.1f}%" if lowest_health > 0 else " | Lowest Health: Wrecked"
-            ttk.Label(header_frame, text=health_text).pack(side='left')
+            # Calculate time to wreck for the location's most critical item
+            time_to_wreck_str = ""
+            priority_list = self.db.get_priority_watch_list(limit=100) # Get a larger list to find our item
+            for item in priority_list:
+                if item['sietch'] == parent_frame.cget('text') and item['location'] == loc_id:
+                    wreck_time = datetime.datetime.fromtimestamp(item['estimated_wreck_time'])
+                    time_diff = wreck_time - datetime.datetime.now()
+                    if time_diff.total_seconds() < 0:
+                        time_to_wreck_str = "(Now)"
+                    else:
+                        days, rem = divmod(time_diff.total_seconds(), 86400)
+                        hours, rem = divmod(rem, 3600)
+                        mins, _ = divmod(rem, 60)
+                        time_to_wreck_str = f"({int(days)}d {int(hours)}h)" if days > 0 else f"({int(hours)}h {int(mins)}m)"
+                    break
 
-        # --- Object Details ---
+            health_text = f" | {lowest_health:.1f}% {time_to_wreck_str}" if lowest_health > 0 else f" | Wrecked {time_to_wreck_str}"
+            health_label = ttk.Label(header_frame, text=health_text)
+            health_label.pack(side='left')
+            health_label.bind("<Button-1>", toggle)
+
         objects = self.db.get_objects_for_location(loc_pk)
         if not objects:
-            ttk.Label(loc_frame, text="  No objects at this location.", style='Italic.TLabel').pack(anchor='w', padx=15)
+            ttk.Label(objects_container, text="No objects at this location.", style='Italic.TLabel').pack(anchor='w')
         else:
             for obj_pk, obj_id, obj_img_path, base_hp in objects:
-                self.create_object_frame(loc_frame, obj_pk, obj_id, obj_img_path, base_hp)
+                self.create_object_frame(objects_container, obj_pk, obj_id, obj_img_path, base_hp)
+
+    def toggle_visibility(self, frame):
+        """Shows or hides a frame."""
+        if frame.winfo_viewable():
+            frame.pack_forget()
+        else:
+            frame.pack(fill='x', expand=True)
 
     def create_object_frame(self, parent_frame, obj_pk, obj_id, obj_img_path, base_hp):
         """Creates the detailed, interactive frame for a single object."""
-        obj_container = ttk.LabelFrame(parent_frame, text=obj_id, padding=10)
-        obj_container.pack(fill='x', expand=True, padx=15, pady=5)
+        obj_container = ttk.LabelFrame(parent_frame, text=obj_id, padding=5, style='Overview.TLabelFrame')
+        obj_container.pack(fill='x', expand=True, padx=0, pady=2)
 
         top_section = ttk.Frame(obj_container)
         top_section.pack(fill='x', expand=True)
