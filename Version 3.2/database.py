@@ -82,6 +82,27 @@ class DatabaseManager:
     def get_sietches(self):
         return [s[0] for s in self.query("SELECT name FROM sietches ORDER BY name").fetchall()]
 
+    def get_sietches_with_location_counts(self):
+        """
+        Returns a list of tuples with (sietch_name, location_count),
+        sorted by count descending, then name ascending.
+        """
+        sql = """
+            SELECT
+                s.name,
+                COUNT(l.id)
+            FROM
+                sietches s
+            LEFT JOIN
+                locations l ON s.name = l.sietch_name
+            GROUP BY
+                s.name
+            ORDER BY
+                COUNT(l.id) DESC,
+                s.name ASC
+        """
+        return self.query(sql).fetchall()
+
     def add_location(self, sietch_name, location_id, pin_x=None, pin_y=None):
         self.query("INSERT OR IGNORE INTO locations (sietch_name, location_id, pin_x, pin_y) VALUES (?, ?, ?, ?)", (sietch_name, location_id, pin_x, pin_y)); self.commit()
 
@@ -193,6 +214,15 @@ class DatabaseManager:
     def set_object_base_hp(self, obj_pk, base_hp):
         """Sets or updates the base HP for an object."""
         self.query("UPDATE objects SET base_hp=? WHERE id=?", (base_hp, obj_pk)); self.commit()
+
+    def rename_object(self, obj_pk, new_name):
+        """Renames an object, checking for uniqueness within its location."""
+        try:
+            self.query("UPDATE objects SET object_id=? WHERE id=?", (new_name, obj_pk))
+            self.commit()
+            return True, "Success"
+        except sqlite3.IntegrityError:
+            return False, "An object with this name already exists at this location."
 
     def get_priority_watch_list(self, limit=10):
         """

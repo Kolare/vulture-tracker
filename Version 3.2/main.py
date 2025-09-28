@@ -11,7 +11,7 @@ import cv2
 
 from database import DatabaseManager
 from hotkey_listener import start_hotkey_listener
-from gui_components import ScrollableFrame, MapFrame, SietchManagerWindow, SietchOverviewFrame
+from gui_components import ScrollableFrame, MapFrame, SietchManagerWindow, SietchOverviewFrame, DataMigrationWindow
 
 class VultureTrackerApp:
     def __init__(self, root):
@@ -53,6 +53,16 @@ class VultureTrackerApp:
         style.configure('TButton', background=self.accent_color, foreground=self.fg_color)
         style.map('TButton', background=[('active', '#4b5563')]) # Cool Gray 600
 
+        style.configure('TEntry', foreground=self.fg_color, fieldbackground=self.accent_color, insertcolor=self.fg_color)
+
+        # Combobox / Dropdown styling
+        style.configure('TCombobox', selectbackground=self.bg_color, fieldbackground=self.accent_color, background=self.accent_color, foreground=self.fg_color)
+        style.map('TCombobox', fieldbackground=[('readonly', self.accent_color)], selectbackground=[('readonly', self.bg_color)], selectforeground=[('readonly', self.fg_color)])
+        self.root.option_add('*TCombobox*Listbox.background', self.accent_color)
+        self.root.option_add('*TCombobox*Listbox.foreground', self.fg_color)
+        self.root.option_add('*TCombobox*Listbox.selectBackground', self.bg_color)
+        self.root.option_add('*TCombobox*Listbox.selectForeground', self.fg_color)
+
         # Special styling for overview components
         style.configure('TLabelFrame', background=self.bg_color)
         style.configure('TLabelFrame.Label', background=self.bg_color, foreground=self.fg_color, font=('Arial', 12, 'bold'))
@@ -66,7 +76,8 @@ class VultureTrackerApp:
         file_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="File", menu=file_menu)
         file_menu.add_command(label="Set Main Map Image...", command=self.set_main_map_image)
-        file_menu.add_command(label="Manage Sietches...", command=self.open_sietch_manager) # New Menu Item
+        file_menu.add_command(label="Manage Sietches...", command=self.open_sietch_manager)
+        file_menu.add_command(label="Data Migration...", command=self.open_migration_window)
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.on_closing)
 
@@ -110,8 +121,11 @@ class VultureTrackerApp:
         ttk.Label(form_frame, text="Location ID:").grid(row=2, column=0, sticky='w', pady=2)
         self.location_menu = ttk.Combobox(form_frame, textvariable=self.location_var, state="readonly", width=15)
         self.location_menu.grid(row=2, column=1, sticky='ew')
+        self.location_menu.bind("<<ComboboxSelected>>", self.update_object_dropdown)
+
         ttk.Label(form_frame, text="Object ID:").grid(row=3, column=0, sticky='w', pady=2)
-        ttk.Entry(form_frame, textvariable=self.object_id_var).grid(row=3, column=1, sticky='ew')
+        self.object_id_combo = ttk.Combobox(form_frame, textvariable=self.object_id_var)
+        self.object_id_combo.grid(row=3, column=1, sticky='ew')
 
         ttk.Label(form_frame, text="Base HP (Opt.):").grid(row=4, column=0, sticky='w', pady=2)
         self.base_hp_var = tk.StringVar()
@@ -126,6 +140,10 @@ class VultureTrackerApp:
     def open_sietch_manager(self):
         """Opens the new Toplevel window for managing sietches."""
         SietchManagerWindow(self.root, self)
+
+    def open_migration_window(self):
+        """Opens the new Toplevel window for manual data entry."""
+        DataMigrationWindow(self.root, self)
 
     def check_capture_queue(self):
         """Checks the queue for new data from the hotkey listener."""
@@ -164,12 +182,12 @@ class VultureTrackerApp:
 
     def save_captured_data(self):
         """Saves the captured data point and updates the Base HP if provided."""
-        sietch = self.sietch_var.get()
+        sietch_display = self.sietch_var.get()
         location_id = self.location_var.get()
         object_id = self.object_id_var.get().strip()
         base_hp_str = self.base_hp_var.get().strip()
 
-        if not all([sietch, location_id, object_id]):
+        if not all([sietch_display, location_id, object_id]):
             messagebox.showerror("Error", "Sietch, Location, and Object ID are required.")
             return
 
@@ -177,12 +195,14 @@ class VultureTrackerApp:
             messagebox.showerror("Error", "No captured data to save.")
             return
 
-        self.db.add_location(sietch, location_id)
-        success, message = self.db.save_data_point(sietch, location_id, object_id, self.last_capture_data)
+        sietch_name = sietch_display.split(' (')[0] # Correctly parse the sietch name
+
+        self.db.add_location(sietch_name, location_id)
+        success, message = self.db.save_data_point(sietch_name, location_id, object_id, self.last_capture_data)
 
         if success:
             if base_hp_str.isdigit():
-                obj_pk = self.db.query("SELECT id FROM objects WHERE location_fk=(SELECT id FROM locations WHERE sietch_name=? AND location_id=?) AND object_id=?", (sietch, location_id, object_id)).fetchone()[0]
+                obj_pk = self.db.query("SELECT id FROM objects WHERE location_fk=(SELECT id FROM locations WHERE sietch_name=? AND location_id=?) AND object_id=?", (sietch_name, location_id, object_id)).fetchone()[0]
                 self.db.set_object_base_hp(obj_pk, int(base_hp_str))
                 self.update_recent_base_hp(base_hp_str)
 
@@ -262,11 +282,39 @@ class VultureTrackerApp:
             self.overview_frame.refresh_overview()
         
     def refresh_sietch_list(self):
-        self.sietch_menu['values'] = self.db.get_sietches()
+        sietch_data = self.db.get_sietches_with_location_counts()
+        display_values = [f"{name} ({count})" for name, count in sietch_data]
+        self.sietch_menu['values'] = display_values
         if hasattr(self, 'map_frame'): self.map_frame.update_filter_options()
     
     def update_location_dropdown(self, event=None):
-        self.location_menu['values'] = [""] + self.db.get_locations_for_sietch(self.sietch_var.get()); self.location_var.set("")
+        sietch_display = self.sietch_var.get()
+        if not sietch_display:
+            self.location_menu['values'] = []
+        else:
+            sietch_name = sietch_display.split(' (')[0]
+            locations = self.db.get_locations_for_sietch(sietch_name)
+            self.location_menu['values'] = [""] + locations
+        self.location_var.set("")
+        self.update_object_dropdown() # Clear object list when location changes
+
+    def update_object_dropdown(self, event=None):
+        """Populates the object combobox based on the selected location."""
+        sietch = self.sietch_var.get()
+        location = self.location_var.get()
+
+        if not sietch or not location:
+            self.object_id_combo['values'] = []
+            self.object_id_var.set("")
+            return
+
+        loc_pk = self.db.query("SELECT id FROM locations WHERE sietch_name=? AND location_id=?", (sietch, location)).fetchone()
+        if loc_pk:
+            objects = [obj[1] for obj in self.db.get_objects_for_location(loc_pk[0])]
+            self.object_id_combo['values'] = objects
+        else:
+            self.object_id_combo['values'] = []
+        self.object_id_var.set("")
         
     def set_main_map_image(self):
         path = filedialog.askopenfilename(filetypes=[("Image Files", "*.png *.jpg *.jpeg")]);
