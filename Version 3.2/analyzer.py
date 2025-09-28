@@ -6,7 +6,9 @@ from datetime import datetime
 class HealthAnalyzer:
     CROP_BOX_SIZE = 50
     SAMPLE_RADII = [19, 20, 21]
-    HEALTH_HUE_RANGES_CV = [(0, 10), (170, 179), (20, 70)]  # Red (wraps around 180), Green-ish
+    # This new range covers the full gradient from green (~85) through yellow, orange, and red (0).
+    # It also includes the upper range for red that wraps around the 0/180 mark in HSV.
+    HEALTH_HUE_RANGES_CV = [(0, 85), (170, 179)]
     HEALTH_SATURATION_MIN = 80
     HEALTH_VALUE_MIN = 70
 
