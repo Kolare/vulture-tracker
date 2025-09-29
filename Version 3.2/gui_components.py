@@ -33,8 +33,13 @@ class ScrollableFrame(ttk.Frame):
 
     def _on_mousewheel(self, event):
         """Cross-platform mouse wheel scroll event."""
-        # Check if the mouse is over this specific canvas
-        if not str(self.canvas.winfo_containing(event.x_root, event.y_root)).startswith(str(self.canvas)):
+        try:
+            # Check if the mouse is over this specific canvas
+            if not str(self.canvas.winfo_containing(event.x_root, event.y_root)).startswith(str(self.canvas)):
+                return
+        except Exception:
+            # This can happen if the mouse is over a temporary widget like a dropdown list.
+            # Catching the generic exception is safer here.
             return
 
         if event.num == 5 or event.delta == -120:
@@ -894,63 +899,72 @@ class DecayGraph(tk.Canvas):
         canvas_w = self.winfo_width()
         canvas_h = self.winfo_height()
 
+        padding = {'top': 15, 'bottom': 20, 'left': 35, 'right': 10}
+        graph_w = canvas_w - padding['left'] - padding['right']
+        graph_h = canvas_h - padding['top'] - padding['bottom']
+
         if len(self.history_data) < 2:
-            self.create_text(10, 10, text="Not enough data to calculate decay.", fill='white', anchor='nw')
+            self.create_text(canvas_w / 2, canvas_h / 2, text="Not enough data to calculate decay.", fill='white', anchor='center')
             return
 
-        points = []
-        for _, ts, health, _ in self.history_data:
-            if health != 'wrecked':
-                try: points.append((ts, float(health)))
-                except (ValueError, TypeError): continue
-
-        points.sort(key=lambda p: p[0])
+        points = sorted([p for p in [(ts, float(h)) for _, ts, h, _ in self.history_data if h != 'wrecked' and str(h).replace('.', '', 1).isdigit()] if isinstance(p[1], float)], key=lambda p: p[0])
 
         if len(points) < 2:
-            self.create_text(10, 10, text="Not enough valid data for decay.", fill='white', anchor='nw')
+            self.create_text(canvas_w / 2, canvas_h / 2, text="Not enough valid data for decay.", fill='white', anchor='center')
             return
 
-        first_ts, last_ts = points[0][0], points[-1][0]
-        time_range = last_ts - first_ts if last_ts > first_ts else 1
+        # --- Dynamic Scaling Logic ---
+        n, sum_x, sum_y, sum_xy, sum_xx = len(points), sum(p[0] for p in points), sum(p[1] for p in points), sum(p[0] * p[1] for p in points), sum(p[0]**2 for p in points)
+        denominator = (n * sum_xx - sum_x**2)
+        m = (n * sum_xy - sum_x * sum_y) / denominator if denominator != 0 else 0
+        b = (sum_y - m * sum_x) / n if denominator != 0 else 0
 
-        def to_coords(p):
-            x = ((p[0] - first_ts) / time_range) * (canvas_w - 20) + 10
-            y = canvas_h - ((p[1] / 100.0) * (canvas_h - 10)) - 5
+        wreck_ts = -b / m if m < 0 else points[-1][0]
+
+        first_ts = points[0][0]
+        last_ts = max(points[-1][0], wreck_ts)
+        time_range = (last_ts - first_ts) if (last_ts > first_ts) else 1
+
+        max_health = max(p[1] for p in points)
+        y_max = 100.0
+        if max_health < 80:
+            y_max = min(100.0, (max_health // 10 + 2) * 10.0)
+        y_min = 0.0
+        health_range = y_max - y_min if y_max > y_min else 1
+
+        # --- Draw Axes and Labels ---
+        self.create_line(padding['left'], padding['top'], padding['left'], canvas_h - padding['bottom'], fill='gray')
+        self.create_line(padding['left'], canvas_h - padding['bottom'], canvas_w - padding['right'], canvas_h - padding['bottom'], fill='gray')
+
+        self.create_text(padding['left'] - 5, padding['top'], text=f"{y_max:.0f}%", fill='white', anchor='e', font=('Arial', 7))
+        self.create_text(padding['left'] - 5, canvas_h - padding['bottom'], text=f"{y_min:.0f}%", fill='white', anchor='e', font=('Arial', 7))
+
+        self.create_text(padding['left'], canvas_h - padding['bottom'] + 5, text=datetime.datetime.fromtimestamp(first_ts).strftime('%b %d'), fill='white', anchor='n', font=('Arial', 7))
+        self.create_text(canvas_w - padding['right'], canvas_h - padding['bottom'] + 5, text=datetime.datetime.fromtimestamp(last_ts).strftime('%b %d'), fill='white', anchor='n', font=('Arial', 7))
+
+        # --- Draw Data ---
+        def to_coords(p_ts, p_health):
+            x = padding['left'] + ((p_ts - first_ts) / time_range) * graph_w
+            y = (canvas_h - padding['bottom']) - ((p_health - y_min) / health_range) * graph_h
             return x, y
 
-        coords = [to_coords(p) for p in points]
+        coords = [to_coords(p[0], p[1]) for p in points]
         if len(coords) > 1:
             self.create_line(coords, fill="#60a5fa", width=2)
 
-        # Linear regression for trend line
-        n = len(points)
-        sum_x = sum(p[0] for p in points)
-        sum_y = sum(p[1] for p in points)
-        sum_xy = sum(p[0] * p[1] for p in points)
-        sum_xx = sum(p[0]**2 for p in points)
-
-        denominator = (n * sum_xx - sum_x**2)
-        if denominator == 0: return
-
-        m = (n * sum_xy - sum_x * sum_y) / denominator
-        b = (sum_y - m * sum_x) / n
-
-        if m < 0: # Only draw if it's a negative (decaying) slope
-            wreck_ts = -b / m
-
+        if m < 0:
             start_y_trend = m * first_ts + b
             start_x_trend_ts = first_ts
-            if start_y_trend > 100: # If trend predicts it started above 100%
-                start_x_trend_ts = (100 - b) / m
-                start_y_trend = 100
+            if start_y_trend > y_max:
+                start_x_trend_ts = (y_max - b) / m
+                start_y_trend = y_max
 
-            start_coords = to_coords((start_x_trend_ts, start_y_trend))
-            end_coords = to_coords((wreck_ts, 0))
+            start_coords = to_coords(start_x_trend_ts, start_y_trend)
+            end_coords = to_coords(wreck_ts, 0)
 
             self.create_line(start_coords, end_coords, fill="#ef4444", dash=(4, 2))
-
             wreck_dt = datetime.datetime.fromtimestamp(wreck_ts)
-            self.create_text(canvas_w - 10, 10, text=f"Est. Wreck: {wreck_dt.strftime('%b %d, %Y')}", anchor='ne', fill='white', font=('Arial', 8))
+            self.create_text(canvas_w - padding['right'], padding['top'], text=f"Est. Wreck: {wreck_dt.strftime('%b %d, %H:%M')}", anchor='ne', fill='white', font=('Arial', 8))
 
     def delete_object(self, obj_pk):
         """Deletes an entire object and all its history after confirmation."""

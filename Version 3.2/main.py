@@ -249,21 +249,37 @@ class VultureTrackerApp:
 
             for item in priority_items:
                 wreck_time = datetime.datetime.fromtimestamp(item['estimated_wreck_time'])
-                time_diff = wreck_time - datetime.datetime.now()
+                now = datetime.datetime.now()
 
-                if time_diff.total_seconds() < 0:
-                    time_str = "Now"
-                else:
-                    days, remainder = divmod(time_diff.total_seconds(), 86400)
+                status_text = ""
+                if wreck_time < now:
+                    # It has already wrecked, calculate time ago
+                    time_since_wreck = now - wreck_time
+                    days, remainder = divmod(time_since_wreck.total_seconds(), 86400)
                     hours, remainder = divmod(remainder, 3600)
                     minutes, _ = divmod(remainder, 60)
-                    time_str = ""
-                    if days > 0: time_str += f"{int(days)}d "
-                    if hours > 0: time_str += f"{int(hours)}h "
-                    time_str += f"{int(minutes)}m"
 
-                entry_text = f"{item['sietch']} | {item['location']} | {item['object']}\n"
-                entry_text += f"  > Wrecks in: {time_str} ({item['current_health']:.1f}%)"
+                    time_ago_str = ""
+                    if int(days) > 0: time_ago_str += f"{int(days)}d "
+                    if int(hours) > 0: time_ago_str += f"{int(hours)}h "
+                    time_ago_str += f"{int(minutes)}m ago"
+
+                    status_text = f"  > Wrecked ({time_ago_str})"
+                else:
+                    # It will wreck in the future
+                    time_to_wreck = wreck_time - now
+                    days, remainder = divmod(time_to_wreck.total_seconds(), 86400)
+                    hours, remainder = divmod(remainder, 3600)
+                    minutes, _ = divmod(remainder, 60)
+
+                    time_left_str = ""
+                    if int(days) > 0: time_left_str += f"{int(days)}d "
+                    if int(hours) > 0: time_left_str += f"{int(hours)}h "
+                    time_left_str += f"{int(minutes)}m"
+
+                    status_text = f"  > Wrecks in: {time_left_str} ({item['current_health']:.1f}%)"
+
+                entry_text = f"{item['sietch']} | {item['location']} | {item['object']}\n{status_text}"
 
                 ttk.Label(self.priority_list_frame, text=entry_text, anchor='w').pack(fill='x', pady=2)
 
@@ -300,17 +316,19 @@ class VultureTrackerApp:
 
     def update_object_dropdown(self, event=None):
         """Populates the object combobox based on the selected location."""
-        sietch = self.sietch_var.get()
+        sietch_display = self.sietch_var.get()
         location = self.location_var.get()
 
-        if not sietch or not location:
+        if not sietch_display or not location:
             self.object_id_combo['values'] = []
             self.object_id_var.set("")
             return
 
-        loc_pk = self.db.query("SELECT id FROM locations WHERE sietch_name=? AND location_id=?", (sietch, location)).fetchone()
-        if loc_pk:
-            objects = [obj[1] for obj in self.db.get_objects_for_location(loc_pk[0])]
+        sietch_name = sietch_display.split(' (')[0]
+
+        loc_pk_row = self.db.query("SELECT id FROM locations WHERE sietch_name=? AND location_id=?", (sietch_name, location)).fetchone()
+        if loc_pk_row:
+            objects = [obj[1] for obj in self.db.get_objects_for_location(loc_pk_row[0])]
             self.object_id_combo['values'] = objects
         else:
             self.object_id_combo['values'] = []
