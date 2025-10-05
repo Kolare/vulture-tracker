@@ -184,6 +184,7 @@ class MapFrame(ttk.Frame):
         self.view_y -= dy / self.zoom_level
         self.pan_start_x = event.x
         self.pan_start_y = event.y
+        self._clamp_view()
         self.redraw_canvas()
 
     def on_zoom(self, event):
@@ -208,7 +209,33 @@ class MapFrame(ttk.Frame):
         self.view_x = image_x - mouse_x / self.zoom_level
         self.view_y = image_y - mouse_y / self.zoom_level
 
+        self._clamp_view()
         self.redraw_canvas()
+
+    def _clamp_view(self):
+        """Constrains the view_x and view_y to prevent panning off the map."""
+        if not self.original_map_image:
+            return
+
+        canvas_width = self.canvas.winfo_width()
+        canvas_height = self.canvas.winfo_height()
+        img_width, img_height = self.original_map_image.size
+
+        # Calculate the maximum allowed top-left coordinates for the view
+        max_view_x = img_width - (canvas_width / self.zoom_level)
+        max_view_y = img_height - (canvas_height / self.zoom_level)
+
+        # If the zoomed image is smaller than the canvas, center it
+        if max_view_x < 0:
+            self.view_x = max_view_x / 2
+        else:
+            # Otherwise, clamp the view to the map edges
+            self.view_x = max(0, min(self.view_x, max_view_x))
+
+        if max_view_y < 0:
+            self.view_y = max_view_y / 2
+        else:
+            self.view_y = max(0, min(self.view_y, max_view_y))
 
     def update_filter_options(self):
         sietches = ["All"] + self.app.db.get_sietches()

@@ -99,17 +99,28 @@ class VultureTrackerApp:
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.on_closing)
 
-        main_paned_window = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
-        main_paned_window.pack(fill="both", expand=True, padx=10, pady=10)
+        # --- Main Window Grid Configuration ---
+        self.root.grid_columnconfigure(0, weight=1)
+        self.root.grid_columnconfigure(1, weight=1)
+        self.root.grid_rowconfigure(0, weight=1)
 
-        left_pane = ttk.Frame(main_paned_window)
-        main_paned_window.add(left_pane, weight=3)
+        # --- Left Column ---
+        left_column_frame = ttk.Frame(self.root)
+        left_column_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        # Configure rows later in specific steps
 
-        form_frame = ttk.Frame(left_pane, padding=10)
+        # --- Right Column ---
+        right_column_frame = ttk.Frame(self.root)
+        right_column_frame.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
+        # Configure rows later in specific steps
+
+        # --- Re-parent existing frames ---
+        # Left side components
+        form_frame = ttk.Frame(left_column_frame, padding=10)
         form_frame.pack(side='bottom', fill='x', expand=False, pady=(10,0))
         form_frame.columnconfigure(1, weight=1)
 
-        self.map_frame = MapFrame(left_pane, self)
+        self.map_frame = MapFrame(left_column_frame, self)
         self.map_frame.pack(side='top', fill='both', expand=True)
 
         ttk.Label(form_frame, text="Captured Data Point", font=('Arial', 14, 'bold')).grid(row=0, columnspan=2, pady=5, sticky='w')
@@ -132,53 +143,55 @@ class VultureTrackerApp:
         self.save_button = ttk.Button(form_frame, text="Save Captured Data", command=self.save_captured_data, state="disabled")
         self.save_button.grid(row=5, columnspan=2, sticky='ew', pady=5, padx=5)
 
-        right_pane = ttk.Frame(main_paned_window)
-        main_paned_window.add(right_pane, weight=2)
+        # --- Right Column Grid Configuration ---
+        right_column_frame.grid_rowconfigure(0, weight=1) # Top half for lists
+        right_column_frame.grid_rowconfigure(1, weight=1) # Bottom half for graph/history
+        right_column_frame.grid_columnconfigure(0, weight=1)
 
+        # --- Top Right Container (for lists) ---
+        top_right_frame = ttk.Frame(right_column_frame)
+        top_right_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=(5,0))
+        top_right_frame.grid_rowconfigure(1, weight=1) # Row for Priority Tree
+        top_right_frame.grid_rowconfigure(3, weight=2) # Row for Main Object Tree
+        top_right_frame.grid_columnconfigure(0, weight=1)
+
+        # --- Bottom Right Container (for graph/history) ---
+        self.graph_frame = ttk.Frame(right_column_frame)
+        self.graph_frame.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
+        ttk.Label(self.graph_frame, text="Select an object from the list to view its history.").pack(expand=True)
+
+        # --- Populate Top Right Container ---
         # Priority Watch List
-        priority_frame = ttk.Frame(right_pane)
-        priority_frame.pack(fill='x', padx=5, pady=(5,0))
-        ttk.Label(priority_frame, text="Priority Watch List", font=('Arial', 14, 'bold')).pack(anchor='w')
-
-        priority_tree_frame = ttk.Frame(right_pane)
-        priority_tree_frame.pack(fill='x', expand=False, padx=5, pady=5)
+        ttk.Label(top_right_frame, text="Priority Watch List", font=('Arial', 14, 'bold')).grid(row=0, column=0, sticky='w', padx=5)
+        priority_tree_frame = ttk.Frame(top_right_frame)
+        priority_tree_frame.grid(row=1, column=0, sticky='nsew', padx=5)
+        priority_tree_frame.column_configure(0, weight=1)
         self.priority_tree = ttk.Treeview(priority_tree_frame, columns=("Time to Failure", "Object"), show="headings", height=5)
-        self.priority_tree.heading("Time to Failure", text="Time to Failure")
-        self.priority_tree.heading("Object", text="Object")
-        self.priority_tree.column("Time to Failure", width=120, anchor='w')
-        self.priority_tree.column("Object", width=280, anchor='w')
-        self.priority_tree.pack(side='left', fill='x', expand=True)
+        self.priority_tree.heading("Time to Failure", text="Time to Failure"); self.priority_tree.heading("Object", text="Object")
+        self.priority_tree.column("Time to Failure", width=120, anchor='w'); self.priority_tree.column("Object", width=280, anchor='w')
+        self.priority_tree.grid(row=0, column=0, sticky='nsew')
         priority_scroll = ttk.Scrollbar(priority_tree_frame, orient="vertical", command=self.priority_tree.yview)
-        priority_scroll.pack(side='right', fill='y')
+        priority_scroll.grid(row=0, column=1, sticky='ns')
         self.priority_tree.configure(yscrollcommand=priority_scroll.set)
 
         # Separator
-        ttk.Separator(right_pane, orient='horizontal').pack(fill='x', pady=5)
+        ttk.Separator(top_right_frame, orient='horizontal').grid(row=2, column=0, sticky='ew', pady=10, padx=5)
 
         # Main Object Tree
-        ttk.Label(right_pane, text="All Tracked Objects", font=('Arial', 14, 'bold')).pack(pady=5, anchor='w', padx=5)
-        tree_frame = ttk.Frame(right_pane)
-        tree_frame.pack(fill='both', expand=True, pady=5)
-
+        ttk.Label(top_right_frame, text="All Tracked Objects", font=('Arial', 14, 'bold')).grid(row=4, column=0, sticky='w', padx=5)
+        tree_frame = ttk.Frame(top_right_frame)
+        tree_frame.grid(row=5, column=0, sticky='nsew', padx=5, pady=5)
+        tree_frame.column_configure(0, weight=1)
+        tree_frame.row_configure(0, weight=1)
         self.tree = ttk.Treeview(tree_frame, columns=("Sietch", "Location", "Object"), show="headings")
-        self.tree.heading("Sietch", text="Sietch")
-        self.tree.heading("Location", text="Location")
-        self.tree.heading("Object", text="Object")
-        self.tree.column("Sietch", width=100, anchor='w')
-        self.tree.column("Location", width=150, anchor='w')
-        self.tree.column("Object", width=150, anchor='w')
-        self.tree.pack(side='left', fill='both', expand=True)
-
+        self.tree.heading("Sietch", text="Sietch"); self.tree.heading("Location", text="Location"); self.tree.heading("Object", text="Object")
+        self.tree.column("Sietch", width=100, anchor='w'); self.tree.column("Location", width=150, anchor='w'); self.tree.column("Object", width=150, anchor='w')
+        self.tree.grid(row=0, column=0, sticky='nsew')
         tree_scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
-        tree_scroll.pack(side='right', fill='y')
+        tree_scroll.grid(row=0, column=1, sticky='ns')
         self.tree.configure(yscrollcommand=tree_scroll.set)
-
         self.tree.bind("<<TreeviewSelect>>", self.on_object_select)
-        self.tree.bind("<Button-3>", self._show_object_context_menu) # Right-click
-
-        self.graph_frame = ttk.Frame(right_pane)
-        self.graph_frame.pack(fill='both', expand=True, padx=5, pady=5)
-        ttk.Label(self.graph_frame, text="Select an object from the list to view its history.").pack()
+        self.tree.bind("<Button-3>", self._show_object_context_menu)
 
     def _trigger_capture(self, event=None):
         print("Capture hotkey triggered...")
@@ -290,27 +303,39 @@ class VultureTrackerApp:
                 self.tree.insert(loc_node_id, "end", values=("", "", obj_id))
 
     def on_object_select(self, event):
-        selected_item = self.tree.focus()
+        tree = self.tree
+        selected_item = tree.focus()
+
         if not selected_item:
             return
 
-        # If a parent node (location) is selected, clear the graph and do nothing.
-        if not self.tree.parent(selected_item):
+        parent_id = tree.parent(selected_item)
+
+        # If the item has no parent, it's a Location node.
+        if not parent_id:
+            # Accordion logic for locations: close all other locations
+            for sibling in tree.get_children(""):
+                if sibling != selected_item:
+                    tree.item(sibling, open=False)
+
+            # Toggle the selected location's state
+            is_open = tree.item(selected_item, "open")
+            tree.item(selected_item, open=not is_open)
+
+            # Clear the graph pane since a location is selected, not an object
             if self.graph_canvas:
                 self.graph_canvas.get_tk_widget().destroy()
                 plt.close('all')
             for widget in self.graph_frame.winfo_children():
                 widget.destroy()
             ttk.Label(self.graph_frame, text="Select an object from the list to view its history.").pack()
-            return
 
-        # It's an object (child), so get its details and display history.
-        parent_id = self.tree.parent(selected_item)
-        sietch, location, _ = self.tree.item(parent_id)['values']
-        _, _, obj_id = self.tree.item(selected_item)['values']
-
-        if obj_id:
-            self.display_object_history(sietch, location, obj_id)
+        # If the item has a parent, it's an Object node.
+        else:
+            sietch, location, _ = tree.item(parent_id, 'values')
+            _, _, obj_id = tree.item(selected_item, 'values')
+            if obj_id:
+                self.display_object_history(sietch, location, obj_id)
 
     def _show_object_context_menu(self, event):
         item_id = self.tree.identify_row(event.y)
@@ -485,17 +510,23 @@ class VultureTrackerApp:
             plt.close('all')
         for widget in self.graph_frame.winfo_children(): widget.destroy()
 
+        self.graph_frame.grid_rowconfigure(0, weight=1)
+        self.graph_frame.grid_rowconfigure(1, weight=1)
+        self.graph_frame.grid_columnconfigure(0, weight=1)
+
+        graph_container = ttk.Frame(self.graph_frame)
+        graph_container.grid(row=0, column=0, sticky="nsew")
+        history_container = ttk.Frame(self.graph_frame)
+        history_container.grid(row=1, column=0, sticky="nsew")
+
         history = self.db.get_history_for_object(sietch, location, selected_object)
 
-        # --- Graph Plotting ---
         if len(history) < 2:
-            ttk.Label(self.graph_frame, text="Not enough data to plot a graph (requires at least 2 points).").pack()
+            ttk.Label(graph_container, text="Not enough data to plot a graph.").pack(expand=True)
         else:
-            fig = Figure(figsize=(5, 3), dpi=100) # Increased height to prevent layout warning
+            fig = Figure(figsize=(5, 3), dpi=100)
             fig.patch.set_facecolor('#1f2937')
             ax = fig.add_subplot(111)
-
-            # (Plotting logic remains the same as before)
             last_point, second_last_point = history[-1], history[-2]
             time_delta_hours = (last_point['timestamp'] - second_last_point['timestamp']).total_seconds() / 3600
             health_delta = second_last_point['health'] - last_point['health']
@@ -504,7 +535,6 @@ class VultureTrackerApp:
                 hours_to_failure = last_point['health'] / decay_rate_per_hour
                 failure_date = last_point['timestamp'] + timedelta(hours=hours_to_failure)
                 ax.plot([last_point['timestamp'], failure_date], [last_point['health'], 0], 'b-', label='Projected Decay')
-
             timestamps = [h['timestamp'] for h in history]; healths = [h['health'] for h in history]
             ax.plot(timestamps, healths, 'g-o', label='Actual Decay', markersize=4)
             now = datetime.now()
@@ -518,8 +548,6 @@ class VultureTrackerApp:
                     ax.plot([now, projections['worst']], [current_health_estimate, 0], 'g:', label='DSC: W')
                     ax.plot([now, projections['median']], [current_health_estimate, 0], 'y:', label='DSC: M')
                     ax.plot([now, projections['latest']], [current_health_estimate, 0], 'r:', label='DSC: L')
-
-            # (Styling remains the same)
             ax.set_facecolor('#0f172a'); ax.tick_params(axis='x', colors='white', labelsize=8); ax.tick_params(axis='y', colors='white', labelsize=8)
             for spine in ax.spines.values(): spine.set_color('white')
             ax.set_xlabel("Date", color='white', fontsize=10); ax.set_ylabel("Health %", color='white', fontsize=10)
@@ -529,23 +557,24 @@ class VultureTrackerApp:
             ax.set_ylim(0, max(h['health'] for h in history) * 1.05 if history else 100)
             legend = ax.legend(facecolor='#1f2937', edgecolor='white', fontsize=8)
             for text in legend.get_texts(): text.set_color('white')
-            fig.tight_layout(pad=1.5) # Use tight_layout with padding
-
-            self.graph_canvas = FigureCanvasTkAgg(fig, master=self.graph_frame)
+            fig.tight_layout(pad=1.5)
+            self.graph_canvas = FigureCanvasTkAgg(fig, master=graph_container)
             self.graph_canvas.draw()
-            self.graph_canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.X, expand=False)
+            self.graph_canvas.get_tk_widget().pack(side=tk.TOP, fill='both', expand=True)
 
-        # --- Historical Data Points List ---
-        ttk.Separator(self.graph_frame).pack(fill='x', pady=10)
-        ttk.Label(self.graph_frame, text="Data Points", font=('Arial', 12, 'bold')).pack(anchor='w', padx=5)
+        history_container.grid_rowconfigure(2, weight=1)
+        history_container.grid_columnconfigure(0, weight=1)
+        ttk.Separator(history_container).grid(row=0, column=0, sticky='ew', padx=5, pady=(0, 5))
+        ttk.Label(history_container, text="Data Points", font=('Arial', 12, 'bold')).grid(row=1, column=0, sticky='w', padx=5)
+        history_frame = ScrollableFrame(history_container)
+        history_frame.grid(row=2, column=0, sticky='nsew', padx=5, pady=(5,0))
 
-        history_frame = ScrollableFrame(self.graph_frame)
-        history_frame.pack(fill='both', expand=True, side=tk.TOP)
-
-        for i, point in enumerate(reversed(history)): # Show newest first
+        if not history:
+            ttk.Label(history_frame.scrollable_frame, text="No history for this object.").pack()
+        for point in reversed(history):
             point_frame = ttk.Frame(history_frame.scrollable_frame, padding=5)
-            point_frame.pack(fill='x', expand=True)
-
+            point_frame.pack(fill='x', expand=True, pady=2)
+            point_frame.columnconfigure(1, weight=1)
             img_path = point.get("image_path")
             thumb_label = ttk.Label(point_frame)
             if img_path and os.path.exists(img_path):
@@ -557,15 +586,13 @@ class VultureTrackerApp:
                     thumb_label.config(image=self.photo_references[photo_key])
                 except Exception as e:
                     self.log_error("Image Loading", f"Failed to load {img_path}: {e}")
-            thumb_label.pack(side='left', padx=5)
-
+            thumb_label.grid(row=0, column=0, sticky='w', padx=(0, 10))
             info_text = f"Health: {point['health']:.2f}%  -  {point['timestamp'].strftime('%Y-%m-%d %H:%M')}"
-            ttk.Label(point_frame, text=info_text).pack(side='left', expand=True, anchor='w', padx=10)
-
-            remove_btn = ttk.Button(point_frame, text="Remove", command=lambda p=point: self._remove_point(p['id'], sietch, location, selected_object))
-            remove_btn.pack(side='right', padx=5)
+            ttk.Label(point_frame, text=info_text).grid(row=0, column=1, sticky='w')
             adjust_btn = ttk.Button(point_frame, text="Adjust", command=lambda p=point: self._adjust_health(p['id'], sietch, location, selected_object))
-            adjust_btn.pack(side='right')
+            adjust_btn.grid(row=0, column=2, sticky='e', padx=(5,0))
+            remove_btn = ttk.Button(point_frame, text="Remove", command=lambda p=point: self._remove_point(p['id'], sietch, location, selected_object))
+            remove_btn.grid(row=0, column=3, sticky='e', padx=(5,0))
 
     def set_main_map_image(self):
         path = filedialog.askopenfilename(filetypes=[("Image Files", "*.png *.jpg *.jpeg")]);
